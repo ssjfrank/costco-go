@@ -145,7 +145,7 @@ func TestGetOnlineOrders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
+	client := seedValidToken(&Client{
 		httpClient: &http.Client{
 			Transport: &testTransport{
 				baseURL: server.URL,
@@ -156,7 +156,7 @@ func TestGetOnlineOrders(t *testing.T) {
 			WarehouseNumber:    "847",
 			TokenRefreshBuffer: 5 * time.Minute,
 		},
-	}
+	})
 
 	orders, err := client.GetOnlineOrders(context.Background(), "2025-01-01", "2025-01-31", 1, 10)
 	require.NoError(t, err)
@@ -241,7 +241,7 @@ func TestGetReceiptDetail(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
+	client := seedValidToken(&Client{
 		httpClient: &http.Client{
 			Transport: &testTransport{
 				baseURL: server.URL,
@@ -252,7 +252,7 @@ func TestGetReceiptDetail(t *testing.T) {
 			WarehouseNumber:    "847",
 			TokenRefreshBuffer: 5 * time.Minute,
 		},
-	}
+	})
 
 	receipt, err := client.GetReceiptDetail(context.Background(), "21134300501862509051323", "warehouse")
 	require.NoError(t, err)
@@ -278,6 +278,17 @@ func generateTestJWT(exp int64) string {
 
 func base64Encode(s string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(s))
+}
+
+// seedValidToken gives a client an unexpired token so a test can exercise API
+// calls directly, without a refresh round trip.
+func seedValidToken(client *Client) *Client {
+	client.token = &TokenResponse{
+		IDToken:      generateTestJWT(time.Now().Add(1 * time.Hour).Unix()),
+		RefreshToken: "test-refresh-token",
+	}
+	client.tokenExpiry = time.Now().Add(1 * time.Hour)
+	return client
 }
 
 // testTransport is a custom RoundTripper that redirects requests to our test server
@@ -426,7 +437,7 @@ func TestClientWithoutLogger(t *testing.T) {
 		Logger:             nil, // Explicitly nil
 	}
 
-	client := NewClient(config)
+	client := seedValidToken(NewClient(config))
 	client.httpClient = &http.Client{
 		Transport: &testTransport{
 			baseURL: server.URL,
