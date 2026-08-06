@@ -1,0 +1,61 @@
+// Download a complete Costco purchase history to local JSON files.
+//
+// Run 'costco-cli -cmd setup' and 'costco-cli -cmd import-token' first so that
+// credentials and tokens exist in ~/.costco/.
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"os/signal"
+	"time"
+
+	"github.com/eshaffer321/costco-go/pkg/costco"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	config, err := costco.LoadConfig()
+	if err != nil || config == nil {
+		log.Fatal("No configuration found. Run 'costco-cli -cmd setup' first")
+	}
+
+	client := costco.NewClient(costco.Config{
+		Email:              config.Email,
+		WarehouseNumber:    config.WarehouseNumber,
+		TokenRefreshBuffer: 5 * time.Minute,
+	})
+
+	// The store writes each record as it arrives, so re-running this program
+	// after an interruption only fetches what is still missing.
+	store, err := costco.NewFileStore("costco-history")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	history, err := client.DownloadHistory(ctx, costco.HistoryOptions{
+		Since:        time.Now().AddDate(-10, 0, 0),
+		Store:        store,
+		RequestDelay: 250 * time.Millisecond,
+		Progress:     func(message string) { log.Println(message) },
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := store.WriteHistory(history); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("%d online orders and %d receipts (%d line items) saved to %s",
+		len(history.Orders), len(history.Receipts), history.ItemCount(), store.Dir())
+	log.Printf("online spend $%.2f, warehouse spend $%.2f",
+		history.OnlineOrderTotal(), history.WarehouseReceiptTotal())
+
+	for _, warning := range history.Warnings {
+		log.Printf("incomplete: %s", warning)
+	}
+}

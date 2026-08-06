@@ -4,35 +4,43 @@ This document contains important information for AI assistants (like Claude) wor
 
 ## Project Overview
 
-This is a Go client library and CLI for accessing Costco order history and receipt data via their GraphQL API. The library handles OAuth2 authentication, automatic token refresh, and provides a clean Go interface for fetching orders and receipts.
+This is a Go client library and CLI with a single purpose: downloading a complete Costco purchase history — every online order and every warehouse receipt with line items — to local JSON files. The library refreshes tokens, walks the history in API-sized date windows, and writes resumable output to disk.
 
-## ⚠️ Known Issue: Password Grant Authentication
+Scope discipline matters here. Features that are not part of "download everything reliably" (spending analytics, per-command report printers) were deliberately removed in 1.0.0; analysis belongs downstream, over the downloaded JSON. Think carefully before adding that surface area back.
 
-**Status:** Password-based authentication (`grant_type=password`) does NOT work with Costco's current OAuth2 setup.
+## ⚠️ Authentication: Browser Token Import Only
 
-**Why:** Costco's OAuth2 endpoint requires Authorization Code flow with PKCE, not the password grant that costco-go currently implements. Attempting password grant authentication results in Azure AD B2C errors about unsupported scopes.
+Costco's OAuth2 endpoint requires the Authorization Code flow with PKCE, which needs a browser. Password grant (`grant_type=password`) does not work and was removed in 0.3.11. The only supported bootstrap is importing a token copied from the browser:
 
-**Workaround:** Use token import from browser instead:
 ```bash
 costco-cli -cmd import-token
 # Paste OAuth response JSON from browser, press Ctrl+D
 ```
 
-**Future Work:** Either (a) implement Authorization Code flow with browser redirect, or (b) remove password grant entirely and document token import as the only supported method. Current approach is broken and misleading.
+After that the stored refresh token is used automatically (~90 day lifetime).
+
+**Future Work:** Implementing the Authorization Code flow with a local redirect listener would remove the manual copy step. It is the main open improvement in this repo.
 
 ## Project Structure
 
 ```
 costco-go/
 ├── cmd/costco-cli/           # CLI application
-│   └── main.go               # CLI entry point
+│   ├── main.go               # Flag parsing and command dispatch
+│   ├── download.go           # The download command
+│   ├── setup.go              # Email/warehouse configuration
+│   └── import.go             # Browser token import
 ├── pkg/costco/               # Core library package
-│   ├── client.go             # Main client implementation
-│   ├── auth.go               # Authentication logic
-│   ├── orders.go             # Order-related operations
-│   ├── receipts.go           # Receipt-related operations
+│   ├── client.go             # HTTP client, token refresh, GraphQL primitives
+│   ├── history.go            # Full-history download, date windowing, retries
+│   ├── store.go              # FileStore: on-disk JSON output and resume
+│   ├── config.go             # Config and token persistence in ~/.costco
+│   ├── orders.go             # Online order types
+│   ├── receipts.go           # Receipt types and discount helpers
+│   ├── queries.go            # GraphQL query documents
 │   ├── constants.go          # API constants and configuration
 │   └── *_test.go             # Test files
+├── examples/                 # Runnable examples (.txt so they stay out of the build)
 ├── CHANGELOG.md              # Version history
 ├── README.md                 # User documentation
 └── go.mod                    # Go module definition
@@ -390,7 +398,7 @@ All API endpoints, client IDs, and configuration values are in `pkg/costco/const
 
 ### Adding a New API Method
 
-1. Define the GraphQL query in the appropriate file (orders.go, receipts.go)
+1. Define the GraphQL query in `queries.go`
 2. Create response struct types
 3. Implement the client method
 4. Add comprehensive tests with mocked HTTP responses

@@ -1,0 +1,91 @@
+// Analyse an already-downloaded history without touching the network.
+//
+// Run the downloader first (costco-cli), then point this at the same directory.
+// Everything here is plain JSON, so the same analysis works from any language.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+
+	"github.com/eshaffer321/costco-go/pkg/costco"
+)
+
+type itemStats struct {
+	Number      string
+	Description string
+	Quantity    int
+	Spent       float64
+	Purchases   int
+}
+
+func main() {
+	dir := "costco-history"
+	if len(os.Args) > 1 {
+		dir = os.Args[1]
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "receipts.json"))
+	if err != nil {
+		log.Fatalf("reading downloaded receipts: %v", err)
+	}
+
+	var receipts []costco.Receipt
+	if err := json.Unmarshal(data, &receipts); err != nil {
+		log.Fatal(err)
+	}
+
+	byItem := map[string]*itemStats{}
+	byDepartment := map[int]float64{}
+
+	for _, receipt := range receipts {
+		// Discounts arrive as separate negative line items; fold them into the
+		// item they apply to so per-item totals reflect what was actually paid.
+		netted, _ := costco.NetDiscounts(receipt.ItemArray)
+
+		for _, item := range netted {
+			byDepartment[item.ItemDepartmentNumber] += item.Amount
+
+			stats, seen := byItem[item.ItemNumber]
+			if !seen {
+				stats = &itemStats{Number: item.ItemNumber, Description: item.ItemDescription01}
+				byItem[item.ItemNumber] = stats
+			}
+			stats.Quantity += item.Unit
+			stats.Spent += item.Amount
+			stats.Purchases++
+		}
+	}
+
+	ranked := make([]*itemStats, 0, len(byItem))
+	for _, stats := range byItem {
+		ranked = append(ranked, stats)
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].Purchases > ranked[j].Purchases })
+
+	fmt.Printf("%d receipts analysed\n\nMost frequently purchased:\n", len(receipts))
+	for i, stats := range ranked {
+		if i >= 10 {
+			break
+		}
+		fmt.Printf("%2d. %-24s bought %2d times, %3d units, $%8.2f\n",
+			i+1, stats.Description, stats.Purchases, stats.Quantity, stats.Spent)
+	}
+
+	departments := make([]int, 0, len(byDepartment))
+	for department := range byDepartment {
+		departments = append(departments, department)
+	}
+	sort.Slice(departments, func(i, j int) bool {
+		return byDepartment[departments[i]] > byDepartment[departments[j]]
+	})
+
+	fmt.Println("\nSpending by department:")
+	for _, department := range departments {
+		fmt.Printf("  Department %3d: $%.2f\n", department, byDepartment[department])
+	}
+}
