@@ -1,429 +1,279 @@
 # Costco Go Client
 
-[![Version](https://img.shields.io/badge/version-0.3.11-blue.svg)](https://github.com/eshaffer321/costco-go/releases/tag/v0.3.11)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/eshaffer321/costco-go/releases/tag/v1.0.0)
 
-A Go client library and CLI for accessing Costco order history and receipt data via their GraphQL API.
+Download your complete Costco purchase history — every online order and every
+warehouse receipt, down to the individual line items — into local JSON files.
 
-## Features
+Costco's website only shows a few months at a time behind a date picker. This
+tool walks the entire history for you and writes it to disk, so you can search,
+analyse or archive years of purchases offline.
 
-- OAuth2 authentication with automatic token refresh
-- Get online order history
-- Get warehouse receipts
-- Get detailed receipt information with line items
-- Command-line interface
-- JSON output support
-- Test-driven development with comprehensive test coverage
-
-## Installation
-
-Install the latest version:
+## Quick start
 
 ```bash
-go get github.com/costco-go/pkg/costco
+# 1. Build
+go build -o costco-cli ./cmd/costco-cli
+
+# 2. Store your email and warehouse number (one time)
+./costco-cli -cmd setup
+
+# 3. Paste an OAuth token copied from costco.com (see below, roughly every 90 days)
+./costco-cli -cmd import-token
+
+# 4. Download everything
+./costco-cli
 ```
 
-Or install a specific version:
+That last command reaches back ten years and writes everything it finds into
+`./costco-history`. It prints progress as it goes:
 
-```bash
-go get github.com/costco-go/pkg/costco@v0.1.0
+```
+Downloading Costco history from 2016-08-06 to 2026-08-06 into costco-history
+
+[1/11] 2025-08-07 to 2026-08-06: online orders
+[1/11] 2025-08-07 to 2026-08-06: 34 online order(s)
+[1/11] 2025-08-07 to 2026-08-06: warehouse receipts
+[1/11] 2025-08-07 to 2026-08-06: 52 receipt(s)
+...
+
+Downloaded 214 online orders and 388 warehouse receipts (7431 receipt line items)
+  Date range:          2016-08-06 to 2026-08-06
+  Online order total:  $41203.87
+  Receipt total:       $76914.02
+  Saved to:            costco-history
+  Start here:          costco-history/manifest.json
 ```
 
-## Library Usage
+## What you get
 
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "log"
-    "time"
-
-    "github.com/costco-go/pkg/costco"
-)
-
-func main() {
-    config := costco.Config{
-        Email:              "your-email@example.com",
-        Password:           "your-password",
-        WarehouseNumber:    "847", // Your local warehouse number
-        TokenRefreshBuffer: 5 * time.Minute,
-    }
-
-    client := costco.NewClient(config)
-    ctx := context.Background()
-
-    // Get online orders
-    orders, err := client.GetOnlineOrders(ctx, "2025-01-01", "2025-01-31", 1, 10)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    for _, order := range orders.BCOrders {
-        fmt.Printf("Order %s: $%.2f\n", order.OrderNumber, order.OrderTotal)
-    }
-
-    // Get receipts
-    receipts, err := client.GetReceipts(ctx, "1/01/2025", "1/31/2025", "all", "all")
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    for _, receipt := range receipts.Receipts {
-        fmt.Printf("Receipt from %s: $%.2f\n", receipt.TransactionDateTime, receipt.Total)
-    }
-
-    // Get detailed receipt
-    receipt, err := client.GetReceiptDetail(ctx, "21134300501862509051323", "warehouse")
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    fmt.Printf("Receipt total: $%.2f with %d items\n", receipt.Total, receipt.TotalItemCount)
-}
+```
+costco-history/
+├── manifest.json          Summary and index of everything below
+├── orders.json            Every online order in one array
+├── receipts.json          Every receipt in one array, with line items
+├── orders/
+│   └── <order number>.json
+└── receipts/
+    └── <barcode>.json
 ```
 
-## Logging
-
-The client supports optional logger injection using Go's standard `log/slog` package. By default, if no logger is provided, all logs are silently discarded.
-
-### Basic Usage (Silent Mode)
-
-```go
-// Logs are silently discarded (default behavior)
-config := costco.Config{
-    Email:           "your-email@example.com",
-    Password:        "your-password",
-    WarehouseNumber: "847",
-}
-client := costco.NewClient(config)
-```
-
-### With Custom Logger
-
-```go
-import (
-    "log/slog"
-    "os"
-
-    "github.com/costco-go/pkg/costco"
-)
-
-// Create a text logger that outputs to stdout
-logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-    Level: slog.LevelInfo,
-}))
-
-config := costco.Config{
-    Email:           "your-email@example.com",
-    Password:        "your-password",
-    WarehouseNumber: "847",
-    Logger:          logger,
-}
-
-client := costco.NewClient(config)
-```
-
-### JSON Logging
-
-For structured JSON logs, use `slog.NewJSONHandler`:
-
-```go
-logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-    Level: slog.LevelDebug, // Include debug logs
-}))
-
-config := costco.Config{
-    Email:           "your-email@example.com",
-    Password:        "your-password",
-    WarehouseNumber: "847",
-    Logger:          logger,
-}
-
-client := costco.NewClient(config)
-```
-
-### Log Levels
-
-The client uses the following log levels:
-
-- `Info`: High-level operations (fetching orders, receipts, authentication success)
-- `Debug`: Detailed debugging information (API requests, token refresh)
-- `Warn`: Non-critical issues (token expiring soon, fallback behavior)
-- `Error`: Error conditions (authentication failures, API errors)
-
-### Structured Logging
-
-All logs use structured key-value pairs for easy parsing and filtering:
+`manifest.json` is the place to start — it holds the totals, the date range, any
+records that could not be downloaded, and a one-line entry per file:
 
 ```json
 {
-  "time": "2025-01-15T10:30:00Z",
-  "level": "INFO",
-  "msg": "fetching online orders",
-  "client": "costco",
-  "start_date": "2025-01-01",
-  "end_date": "2025-01-31",
-  "page_number": 1,
-  "page_size": 10
+  "library_version": "1.0.0",
+  "generated_at": "2026-08-06T09:14:22Z",
+  "since": "2016-08-06",
+  "until": "2026-08-06",
+  "order_count": 214,
+  "receipt_count": 388,
+  "item_count": 7431,
+  "online_order_total": 41203.87,
+  "warehouse_receipt_total": 76914.02,
+  "receipts": [
+    {
+      "id": "21134300501862509051323",
+      "date": "2026-08-01",
+      "total": 269.13,
+      "description": "MERIDIAN",
+      "file": "receipts/21134300501862509051323.json"
+    }
+  ]
 }
 ```
 
-Every log message includes a `client=costco` attribute for easy identification in multi-client applications.
+Each receipt file contains the full transaction: warehouse and address, every
+line item with quantity and price, the tax breakdown, payment method, instant
+savings and the membership number.
 
-## CLI Usage
+## Resuming and updating
 
-### Build the CLI
+Receipts are written to disk the moment they arrive, and every run skips
+receipts that are already saved. That means:
 
-```bash
-go build -o costco-cli ./cmd/costco-cli
-```
+- **An interrupted download costs nothing.** Press Ctrl-C, re-run the same
+  command, and it picks up only what is missing.
+- **Keeping the archive current is cheap.** Re-running later fetches only new
+  receipts. Add `-since` to narrow the scan: `./costco-cli -since 2026-01-01`.
+- **Individual failures do not sink the run.** If one receipt is unavailable,
+  it is listed at the end and the command exits non-zero; re-running retries
+  just those. Use `-force` to re-download records that are already saved.
 
-### Authentication Setup
+## CLI flags
 
-Authentication requires a valid token from Costco's OAuth2 endpoint. Tokens are stored in `~/.costco/tokens.json` and automatically refreshed (refresh tokens are valid for ~90 days).
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `-cmd` | `download` | `download`, `setup`, `import-token` or `info` |
+| `-out` | `costco-history` | Directory to write into |
+| `-since` | 10 years ago | Earliest date to download (`YYYY-MM-DD`) |
+| `-until` | today | Latest date to download (`YYYY-MM-DD`) |
+| `-window` | `365` | Maximum days requested per API call |
+| `-page-size` | `50` | Online orders requested per page |
+| `-delay` | `250ms` | Pause between API calls |
+| `-retries` | `3` | Retries per failed API call |
+| `-no-items` | off | Skip per-receipt line item lookups (much faster, less detail) |
+| `-force` | off | Re-download receipts that are already saved |
+| `-quiet` | off | Print only the final summary |
 
-**Step 1 — Store your email and warehouse number:**
+If a wide date range gets rejected by Costco's API, narrow the window:
+`./costco-cli -window 90`.
 
-```bash
-./costco-cli -cmd setup
-```
+## Authentication
 
-**Step 2 — Import a token from your browser:**
-
-```bash
-./costco-cli -cmd import-token
-```
-
-Then paste the JSON response body when prompted. To get it:
+Costco's sign-in requires a browser, so the token is copied over once and then
+refreshed automatically (refresh tokens last about 90 days).
 
 1. Log in to [costco.com](https://www.costco.com) in your browser
 2. Open DevTools → Network tab → filter by **Fetch/XHR**
 3. Search for **"token"** and select the request to the token endpoint
 4. Click the **Response** tab and copy the full JSON body
-5. Paste it into the terminal and press **Ctrl+D**
-
-The command will confirm the token was saved and show the expiry times:
+5. Run `./costco-cli -cmd import-token`, paste it, and press **Ctrl+D**
 
 ```
 ✓ Tokens saved to ~/.costco/tokens.json
-  ID token valid until:      2026-04-23 14:53:00 MDT
-  Refresh token valid until: 2026-07-22 14:38:00 MDT
+  ID token valid until:      2026-08-06 14:53:00 MDT
+  Refresh token valid until: 2026-11-04 14:38:00 MDT
 ```
 
-Once tokens are saved, all CLI commands work without any further authentication steps. When the refresh token expires (~90 days), repeat Step 2.
+Run `./costco-cli -cmd info` at any time to see where config and tokens live and
+whether they are still valid.
 
-### Get online orders
+### Where your data goes
 
-```bash
-# Get orders from last 3 months (default)
-./costco-cli -cmd orders
+Nowhere but your own machine and Costco. The only hosts contacted are
+`signin.costco.com` (token refresh) and `ecom-api.costco.com` (the GraphQL API);
+there is no telemetry or third-party reporting. Tokens are stored in
+`~/.costco/tokens.json` and downloaded history is written with user-only
+permissions (`0600` files, `0700` directories), because receipts contain your
+membership number, warehouse addresses and payment descriptions.
 
-# Get orders for specific date range
-./costco-cli -cmd orders -start 2025-01-01 -end 2025-01-31
+## Library usage
 
-# Get orders with pagination
-./costco-cli -cmd orders -page 2 -size 20
+```go
+package main
 
-# Output as JSON
-./costco-cli -cmd orders -json
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/eshaffer321/costco-go/pkg/costco"
+)
+
+func main() {
+	client := costco.NewClient(costco.Config{
+		WarehouseNumber:    "847",
+		TokenRefreshBuffer: 5 * time.Minute,
+	})
+
+	store, err := costco.NewFileStore("costco-history")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	history, err := client.DownloadHistory(context.Background(), costco.HistoryOptions{
+		Since:    time.Now().AddDate(-10, 0, 0),
+		Store:    store,
+		Progress: func(message string) { log.Println(message) },
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := store.WriteHistory(history); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("%d orders, %d receipts, $%.2f in warehouse spending",
+		len(history.Orders), len(history.Receipts), history.WarehouseReceiptTotal())
+}
 ```
 
-### Get receipts
+`HistoryOptions` controls the download:
 
-```bash
-# Get all receipts from last 3 months
-./costco-cli -cmd receipts
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `Since` / `Until` | — / now | Inclusive date range |
+| `WindowDays` | `365` | Maximum days per API call |
+| `PageSize` | `50` | Online orders per page |
+| `SkipReceiptDetails` | `false` | Keep receipt summaries, skip line items |
+| `Store` | `nil` | Persist records as they arrive; enables resuming |
+| `Force` | `false` | Ignore records already in `Store` |
+| `RequestDelay` | `0` | Pause between API calls |
+| `MaxRetries` | `2` | Extra attempts per failed call |
+| `Progress` | `nil` | Receives human-readable status lines |
 
-# Get receipts for specific date range
-./costco-cli -cmd receipts -start 2025-01-01 -end 2025-01-31
+Anything the downloader could not retrieve lands in `History.Warnings` rather
+than aborting the run.
 
-# Output as JSON
-./costco-cli -cmd receipts -json
+The lower-level calls remain available if you want a single slice of data
+instead of a full archive: `GetOnlineOrders`, `FetchAllOnlineOrders`,
+`GetReceipts` and `GetReceiptDetail`.
+
+### Logging
+
+The client takes an optional `*slog.Logger`. With no logger, everything is
+discarded silently.
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	Level: slog.LevelDebug,
+}))
+
+client := costco.NewClient(costco.Config{
+	WarehouseNumber: "847",
+	Logger:          logger,
+})
 ```
 
-### Get receipt details
+Tokens and credentials are never logged, at any level.
 
-```bash
-# Get detailed receipt with all line items
-./costco-cli -cmd receipt-detail -barcode 21134300501862509051323
+## Working with downloaded receipts
 
-# Output as JSON
-./costco-cli -cmd receipt-detail -barcode 21134300501862509051323 -json
+Costco returns discounts as separate line items rather than adjusting the item
+they apply to. A discount item has a negative amount, a negative unit count, and
+a description starting with `/` followed by the parent item number or
+description (for example `/1553261`).
+
+Returns also have negative amounts, but they carry a normal description and
+appear on receipts with `TransactionType: "Refund"`.
+
+```go
+// Identify a discount and the item it belongs to.
+for _, item := range receipt.ItemArray {
+	if item.IsDiscount() {
+		fmt.Printf("$%.2f off item %s\n", math.Abs(item.Amount), item.GetParentItemNumber())
+	}
+}
+
+// Or apply every discount to its parent in one call.
+netted, orphaned := costco.NetDiscounts(receipt.ItemArray)
 ```
 
-### CLI Flags
+`NetDiscounts` matches a discount to its parent by item number, then by exact
+description, then by substring, and finally by word overlap — which handles
+coupons that reference a product generically (`/AAA BATTERY` against
+`DURACELL AAA`). Discounts it cannot place are returned as `orphaned`.
 
-- `-cmd`: Command to run: `setup`, `import-token`, `info`, `orders`, `receipts`, `receipt-detail`
-- `-start`: Start date in YYYY-MM-DD format
-- `-end`: End date in YYYY-MM-DD format
-- `-barcode`: Receipt barcode (required for `receipt-detail`)
-- `-page`: Page number for orders (default: 1)
-- `-size`: Page size for orders (default: 10)
-- `-json`: Output results as JSON
+The discount amount is already included in the receipt's `SubTotal`, so do not
+subtract it a second time.
 
-## Running Tests
-
-```bash
-go test ./pkg/costco -v
-```
-
-## API Details
-
-The client uses Costco's OAuth2 authentication flow and GraphQL API:
+## API details
 
 - **Auth endpoint**: `https://signin.costco.com/.../oauth2/v2.0/token`
 - **GraphQL endpoint**: `https://ecom-api.costco.com/ebusiness/order/v1/orders/graphql`
 - **Auth header**: `costco-x-authorization: Bearer {id_token}`
 
-The client handles:
-- Automatic token refresh before expiry (tokens stored in `~/.costco/tokens.json`)
-- Thread-safe token management
-- GraphQL query construction and response parsing
+The client refreshes tokens before they expire, manages them in a thread-safe
+way, and persists them to `~/.costco/tokens.json`.
 
-Bootstrap tokens using `costco-cli -cmd import-token` — see [Authentication Setup](#authentication-setup) above.
+## Running tests
 
-## Data Structures
-
-### Online Orders
-- Order header information (date, total, status)
-- Line items with shipping details
-- Shipment tracking information
-
-### Receipts
-- Transaction details (date, warehouse, total)
-- Complete line item details with prices
-- Tax breakdown
-- Payment information
-- Membership number
-
-## Handling Discount Line Items
-
-Costco's API returns discounts as separate line items in receipts. These discount items have special characteristics that allow you to identify and process them differently from regular items.
-
-### Discount Item Characteristics
-
-Discount line items have:
-- **Negative amount** (e.g., `-4.00`)
-- **Negative unit** (e.g., `-1`)
-- **Description starting with "/"** followed by the parent item number (e.g., `"/1553261"`)
-
-**Important:** The discount amount is already factored into the receipt's `SubTotal`. You should not double-count discounts when calculating totals.
-
-### Distinguishing Discounts from Returns
-
-Return items also have negative amounts, but they differ from discounts:
-- Returns have **normal descriptions** (e.g., "RED GRAPE")
-- Returns appear in receipts with **`TransactionType: "Refund"`**
-- Returns do **NOT** have the "/" prefix in their description
-
-### Helper Methods
-
-The library provides two helper methods to identify and process discount items:
-
-#### IsDiscount()
-
-Returns `true` if a line item is a discount:
-
-```go
-for _, item := range receipt.ItemArray {
-    if item.IsDiscount() {
-        fmt.Printf("Found discount: $%.2f\n", math.Abs(item.Amount))
-        continue
-    }
-    // Process regular items...
-}
+```bash
+go test ./... -v
 ```
-
-#### GetParentItemNumber()
-
-Returns the item number that the discount applies to:
-
-```go
-for _, item := range receipt.ItemArray {
-    if item.IsDiscount() {
-        parentItemNum := item.GetParentItemNumber()
-        fmt.Printf("Discount of $%.2f applies to item %s\n",
-            math.Abs(item.Amount),
-            parentItemNum)
-    }
-}
-```
-
-### Example: Calculating Net Item Amounts
-
-Here's how to build a map of items with discounts applied:
-
-```go
-// Build net amounts map
-itemAmounts := make(map[string]float64)
-itemDescs := make(map[string]string)
-
-for _, item := range receipt.ItemArray {
-    if item.IsDiscount() {
-        // Apply discount to parent item
-        parentNum := item.GetParentItemNumber()
-        itemAmounts[parentNum] += item.Amount
-    } else {
-        // Add regular item
-        itemAmounts[item.ItemNumber] += item.Amount
-        itemDescs[item.ItemNumber] = item.ItemDescription01
-    }
-}
-
-// Now process items with net amounts
-for itemNum, netAmount := range itemAmounts {
-    fmt.Printf("%s: $%.2f\n", itemDescs[itemNum], netAmount)
-}
-```
-
-### Real-World Example
-
-Given this receipt data:
-
-```json
-{
-  "itemArray": [
-    {
-      "itemNumber": "1553261",
-      "itemDescription01": "GUAC BOWL",
-      "amount": 13.99,
-      "unit": 1
-    },
-    {
-      "itemNumber": "363064",
-      "itemDescription01": "/1553261",
-      "amount": -4.00,
-      "unit": -1
-    }
-  ],
-  "subTotal": 9.99,
-  "instantSavings": 4.00
-}
-```
-
-Processing with helpers:
-
-```go
-// Item 1: Regular item
-item1.IsDiscount() // Returns: false
-
-// Item 2: Discount item
-item2.IsDiscount()           // Returns: true
-item2.GetParentItemNumber()  // Returns: "1553261"
-
-// Net amount: 13.99 + (-4.00) = 9.99 (matches subTotal)
-```
-
-### Use Cases
-
-**Budgeting Applications:** Calculate net amounts per item to accurately categorize spending.
-
-**Price Tracking:** Track both original and discounted prices to analyze savings over time.
-
-**Receipt Processing:** Filter out discount line items to avoid confusion when presenting items to users.
-
-**Analytics:** Aggregate `instantSavings` data across receipts to measure total savings.
 
 ## License
 

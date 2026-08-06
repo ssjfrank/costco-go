@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-08-06
+
+The library and CLI are now focused on one job: downloading a complete Costco
+purchase history to local JSON files.
+
+### Added
+- **`Client.DownloadHistory(ctx, HistoryOptions)`**: Downloads every online order and warehouse receipt in a date range. The range is walked newest-first in windows small enough for Costco's API to accept, online orders are paged until exhausted, and each receipt is expanded into its full line-item detail. A failure in the newest window aborts the run (that almost always means expired tokens); later failures are collected in `History.Warnings` so one unavailable record cannot discard years of downloaded data.
+- **`Client.FetchAllOnlineOrders(ctx, startDate, endDate, pageSize)`**: Pages through every online order in a date range.
+- **`FileStore`**: Writes history to a directory as `orders/<order number>.json`, `receipts/<barcode>.json`, combined `orders.json` / `receipts.json`, and a `manifest.json` index. Records are written as they arrive, so an interrupted download resumes instead of starting over. Files and directories are created user-only (0600/0700) because receipts contain membership numbers and payment descriptions.
+- **`SplitDateRange(since, until, windowDays)`**: Splits a date range into contiguous, non-overlapping windows, newest first.
+- **`History`, `HistoryOptions`, `HistoryStore`, `Manifest`, `DateWindow`**: Supporting types for the download flow.
+- **`ErrNoOrderData`**: Sentinel error letting callers distinguish "this window has no orders" from a real failure.
+- **`costco-cli` download command** (now the default): `costco-cli` with no arguments downloads everything into `./costco-history`. Flags: `-out`, `-since`, `-until`, `-window`, `-page-size`, `-delay`, `-retries`, `-no-items`, `-force`, `-quiet`. Exits non-zero when any record could not be downloaded.
+
+### Changed
+- **BREAKING — CLI commands**: `-cmd orders`, `-cmd receipts` and `-cmd receipt-detail` are gone. The downloaded JSON contains the same data, and `-cmd` now defaults to `download`. `setup`, `import-token` and `info` are unchanged.
+- **`GetReceipts` date handling**: Dates given as `YYYY-MM-DD` are converted to the `M/DD/YYYY` format Costco's receipt API requires, so both formats now work. Previously an ISO date was forwarded unchanged and silently returned nothing.
+- **`CostcoClient` interface**: Now describes the download methods alongside the three API primitives.
+
+### Removed
+- **BREAKING — spending analytics helpers**: `GetAllTransactionItems`, `GetItemHistory`, `GetSpendingSummary` and `GetFrequentItems`, along with the `TransactionWithItems`, `ItemPurchase`, `SpendingByDepartment` and `FrequentItem` types. Each re-downloaded the whole history to compute one aggregate; the same analysis now runs offline over the downloaded JSON.
+
+### Fixed
+- **Client tests**: Several tests still built clients without tokens after password-grant authentication was removed in 0.3.11, so they failed before reaching their test server.
+
+[1.0.0]: https://github.com/eshaffer321/costco-go/compare/v0.3.11...v1.0.0
+
 ## [0.3.11] - 2026-06-20
 
 ### Fixed
