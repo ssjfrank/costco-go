@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,10 @@ import (
 )
 
 // Constants moved to constants.go for better organization
+
+// ErrNoOrderData is returned by GetOnlineOrders when the API responds without an
+// orders payload, which is how a date range containing no orders is reported.
+var ErrNoOrderData = errors.New("no order data returned")
 
 type Client struct {
 	httpClient  *http.Client
@@ -90,7 +95,6 @@ func NewClient(config Config) *Client {
 
 	return client
 }
-
 
 func (c *Client) calculateTokenExpiry(tokenString string) time.Time {
 	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
@@ -341,7 +345,7 @@ func (c *Client) GetOnlineOrders(ctx context.Context, startDate, endDate string,
 	}
 
 	if len(result.GetOnlineOrders) == 0 {
-		return nil, fmt.Errorf("no order data returned")
+		return nil, ErrNoOrderData
 	}
 
 	orderCount := len(result.GetOnlineOrders[0].BCOrders)
@@ -365,7 +369,8 @@ func (c *Client) GetOnlineOrders(ctx context.Context, startDate, endDate string,
 // Returns:
 //   - ReceiptsWithCountsResponse containing receipts and counts by type
 //
-// Note: The date format for receipts differs from online orders (M/DD/YYYY vs YYYY-MM-DD).
+// Note: Costco's receipt API expects M/DD/YYYY. Dates given as YYYY-MM-DD are
+// converted automatically, so either format may be passed.
 //
 // Example:
 //
@@ -379,6 +384,9 @@ func (c *Client) GetOnlineOrders(ctx context.Context, startDate, endDate string,
 //	        receipt.TransactionDateTime, receipt.Total)
 //	}
 func (c *Client) GetReceipts(ctx context.Context, startDate, endDate, documentType, documentSubType string) (*ReceiptsWithCountsResponse, error) {
+	startDate = normalizeReceiptDate(startDate)
+	endDate = normalizeReceiptDate(endDate)
+
 	c.getLogger().Info("fetching receipts",
 		slog.String("start_date", startDate),
 		slog.String("end_date", endDate),
