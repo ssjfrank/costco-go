@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -491,6 +493,50 @@ func TestDownloadHistory_ForceRefetchIgnoresStoredReceipts(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 6, api.detailCallCount())
+}
+
+// TestDownloadHistory_WritesCompleteOutputTree exercises the whole path a CLI user
+// takes: download everything, then write it out for offline use.
+func TestDownloadHistory_WritesCompleteOutputTree(t *testing.T) {
+	api := newFakeCostcoAPI()
+	client := newHistoryTestClient(t, api.start(t).URL)
+
+	dir := t.TempDir()
+	store, err := NewFileStore(dir)
+	require.NoError(t, err)
+
+	history, err := client.DownloadHistory(context.Background(), HistoryOptions{
+		Since:      mustDate(t, "2022-01-01"),
+		Until:      mustDate(t, "2024-12-31"),
+		WindowDays: 365,
+		Store:      store,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.WriteHistory(history))
+
+	for _, relative := range []string{
+		"manifest.json",
+		"orders.json",
+		"receipts.json",
+		filepath.Join("orders", "ORDER-2024-A.json"),
+		filepath.Join("receipts", "BC2024.json"),
+		filepath.Join("receipts", "BC2022.json"),
+	} {
+		_, statErr := os.Stat(filepath.Join(dir, relative))
+		assert.NoError(t, statErr, "expected %s to be written", relative)
+	}
+
+	var manifest Manifest
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, &manifest))
+
+	assert.Equal(t, 4, manifest.OrderCount)
+	assert.Equal(t, 3, manifest.ReceiptCount)
+	assert.Equal(t, 3, manifest.ItemCount)
+	assert.Equal(t, "2022-01-01", manifest.Since)
+	assert.Equal(t, "2024-12-31", manifest.Until)
+	assert.Empty(t, manifest.Warnings)
 }
 
 func TestDownloadHistory_RejectsFutureSince(t *testing.T) {

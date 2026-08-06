@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/eshaffer321/costco-go/pkg/costco"
@@ -14,206 +15,85 @@ import (
 
 func main() {
 	var (
-		command    = flag.String("cmd", "", "Command: setup, import-token, info, orders, receipts, receipt-detail")
-		startDate  = flag.String("start", "", "Start date (YYYY-MM-DD)")
-		endDate    = flag.String("end", "", "End date (YYYY-MM-DD)")
-		barcode    = flag.String("barcode", "", "Receipt barcode (for receipt-detail)")
-		pageNumber = flag.Int("page", 1, "Page number for orders")
-		pageSize   = flag.Int("size", 10, "Page size for orders")
-		outputJSON = flag.Bool("json", false, "Output as JSON")
+		command     = flag.String("cmd", "download", "Command: download, setup, import-token, info")
+		outputDir   = flag.String("out", "costco-history", "Directory to write the downloaded history into")
+		since       = flag.String("since", "", "Earliest date to download (YYYY-MM-DD, default: 10 years ago)")
+		until       = flag.String("until", "", "Latest date to download (YYYY-MM-DD, default: today)")
+		windowDays  = flag.Int("window", 365, "Maximum number of days requested per API call")
+		pageSize    = flag.Int("page-size", 50, "Number of online orders requested per page")
+		delay       = flag.Duration("delay", 250*time.Millisecond, "Pause between API calls")
+		retries     = flag.Int("retries", 3, "Retries per failed API call")
+		skipDetails = flag.Bool("no-items", false, "Skip per-receipt line item lookups (faster, less detail)")
+		force       = flag.Bool("force", false, "Re-download receipts that were already saved")
+		quiet       = flag.Bool("quiet", false, "Print only the final summary")
 	)
 
+	flag.Usage = usage
 	flag.Parse()
 
-	// Handle setup and info commands first
-	if *command == "setup" {
-		if err := setupCredentials(); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-
-	if *command == "import-token" {
-		if err := runImportTokens(); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-
-	if *command == "info" {
-		fmt.Println(costco.GetConfigInfo())
-		return
-	}
-
-	// Load stored config
-	storedConfig, err := costco.LoadConfig()
-	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
-	}
-
-	if storedConfig == nil {
-		log.Fatal("No configuration found. Run 'costco-cli -cmd setup' first")
-	}
-
-	// Check if we have valid tokens
-	tokens, _ := costco.LoadTokens()
-	if tokens == nil || time.Now().After(tokens.RefreshTokenExpiresAt) {
-		log.Fatal("No valid tokens found. Run 'costco-cli -cmd import-token' to import tokens from your browser")
-	}
-
-	// Default date range if not provided
-	if *startDate == "" {
-		*startDate = time.Now().AddDate(0, -3, 0).Format("2006-01-02")
-	}
-	if *endDate == "" {
-		*endDate = time.Now().Format("2006-01-02")
-	}
-
-	config := costco.Config{
-		Email:              storedConfig.Email,
-		WarehouseNumber:    storedConfig.WarehouseNumber,
-		TokenRefreshBuffer: 5 * time.Minute,
-	}
-
-	client := costco.NewClient(config)
-	ctx := context.Background()
-
 	switch *command {
-	case "orders":
-		getOrders(ctx, client, *startDate, *endDate, *pageNumber, *pageSize, *outputJSON)
-	case "receipts":
-		getReceipts(ctx, client, *startDate, *endDate, *outputJSON)
-	case "receipt-detail":
-		if *barcode == "" {
-			log.Fatal("Barcode is required for receipt-detail command")
+	case "setup":
+		exitOnError(setupCredentials())
+	case "import-token":
+		exitOnError(runImportTokens())
+	case "info":
+		fmt.Print(costco.GetConfigInfo())
+	case "download":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		err := runDownload(ctx, downloadConfig{
+			OutputDir:   *outputDir,
+			Since:       *since,
+			Until:       *until,
+			WindowDays:  *windowDays,
+			PageSize:    *pageSize,
+			Delay:       *delay,
+			Retries:     *retries,
+			SkipDetails: *skipDetails,
+			Force:       *force,
+			Quiet:       *quiet,
+		}, os.Stdout)
+
+		// An incomplete download has already reported itself in the summary; the
+		// non-zero exit is there so scripts notice the gap.
+		if errors.Is(err, errIncompleteHistory) {
+			os.Exit(1)
 		}
-		getReceiptDetail(ctx, client, *barcode, *outputJSON)
+		exitOnError(err)
 	default:
-		log.Fatalf("Unknown command: %s", *command)
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", *command)
+		usage()
+		os.Exit(2)
 	}
 }
 
-func getOrders(ctx context.Context, client *costco.Client, startDate, endDate string, pageNumber, pageSize int, outputJSON bool) {
-	orders, err := client.GetOnlineOrders(ctx, startDate, endDate, pageNumber, pageSize)
-	if err != nil {
-		log.Fatalf("Error getting orders: %v", err)
-	}
-
-	if outputJSON {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(orders); err != nil {
-			log.Fatalf("Error encoding JSON: %v", err)
-		}
+func exitOnError(err error) {
+	if err == nil {
 		return
 	}
-
-	fmt.Printf("Online Orders (%s to %s)\n", startDate, endDate)
-	fmt.Printf("Page %d of %d total records\n", pageNumber, orders.TotalNumberOfRecords)
-	fmt.Println("=" + string(make([]byte, 80)))
-
-	for _, order := range orders.BCOrders {
-		fmt.Printf("\nOrder #%s\n", order.OrderNumber)
-		fmt.Printf("  Date: %s\n", order.OrderPlacedDate)
-		fmt.Printf("  Status: %s\n", order.Status)
-		fmt.Printf("  Total: $%.2f\n", order.OrderTotal)
-		fmt.Printf("  Warehouse: %s\n", order.WarehouseNumber)
-
-		if len(order.OrderLineItems) > 0 {
-			fmt.Printf("  Items: %d\n", len(order.OrderLineItems))
-			for i, item := range order.OrderLineItems {
-				if i < 3 {
-					fmt.Printf("    - %s (Status: %s)\n", item.ItemDescription, item.Status)
-				}
-			}
-			if len(order.OrderLineItems) > 3 {
-				fmt.Printf("    ... and %d more items\n", len(order.OrderLineItems)-3)
-			}
-		}
-	}
+	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	os.Exit(1)
 }
 
-func getReceipts(ctx context.Context, client *costco.Client, startDate, endDate string, outputJSON bool) {
-	// Convert date format for receipts API (M/DD/YYYY)
-	startTime, _ := time.Parse("2006-01-02", startDate)
-	endTime, _ := time.Parse("2006-01-02", endDate)
-	startDateFormatted := fmt.Sprintf("%d/%02d/%d", startTime.Month(), startTime.Day(), startTime.Year())
-	endDateFormatted := fmt.Sprintf("%d/%02d/%d", endTime.Month(), endTime.Day(), endTime.Year())
+func usage() {
+	fmt.Fprint(flag.CommandLine.Output(), `costco-cli downloads your complete Costco purchase history to local JSON files.
 
-	receipts, err := client.GetReceipts(ctx, startDateFormatted, endDateFormatted, "all", "all")
-	if err != nil {
-		log.Fatalf("Error getting receipts: %v", err)
-	}
+First run:
+  costco-cli -cmd setup          Store your email and warehouse number
+  costco-cli -cmd import-token   Paste the OAuth token copied from costco.com
 
-	if outputJSON {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(receipts); err != nil {
-			log.Fatalf("Error encoding JSON: %v", err)
-		}
-		return
-	}
+Every run after that:
+  costco-cli                     Download everything into ./costco-history
+  costco-cli -out ~/costco       Download into a different directory
+  costco-cli -since 2020-01-01   Limit how far back to reach
+  costco-cli -no-items           Skip receipt line items for a quick pass
+  costco-cli -cmd info           Show where config and tokens are stored
 
-	fmt.Printf("Receipts (%s to %s)\n", startDate, endDate)
-	fmt.Printf("In-Warehouse: %d, Gas Station: %d, Car Wash: %d\n",
-		receipts.InWarehouse, receipts.GasStation, receipts.CarWash)
-	fmt.Println("=" + string(make([]byte, 80)))
+Downloads resume: re-running skips receipts already on disk, so an interrupted
+run only fetches what is missing. Use -force to re-download everything.
 
-	for _, receipt := range receipts.Receipts {
-		fmt.Printf("\n%s - %s\n", receipt.TransactionDateTime, receipt.ReceiptType)
-		fmt.Printf("  Warehouse: %s\n", receipt.WarehouseName)
-		fmt.Printf("  Barcode: %s\n", receipt.TransactionBarcode)
-		fmt.Printf("  Total: $%.2f\n", receipt.Total)
-		fmt.Printf("  Items: %d\n", receipt.TotalItemCount)
-	}
-}
-
-func getReceiptDetail(ctx context.Context, client *costco.Client, barcode string, outputJSON bool) {
-	receipt, err := client.GetReceiptDetail(ctx, barcode, "warehouse")
-	if err != nil {
-		log.Fatalf("Error getting receipt detail: %v", err)
-	}
-
-	if outputJSON {
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(receipt); err != nil {
-			log.Fatalf("Error encoding JSON: %v", err)
-		}
-		return
-	}
-
-	fmt.Printf("Receipt Detail\n")
-	fmt.Println("=" + string(make([]byte, 80)))
-	fmt.Printf("Date: %s\n", receipt.TransactionDateTime)
-	fmt.Printf("Warehouse: %s (#%d)\n", receipt.WarehouseName, receipt.WarehouseNumber)
-	fmt.Printf("Address: %s, %s, %s %s\n",
-		receipt.WarehouseAddress1, receipt.WarehouseCity,
-		receipt.WarehouseState, receipt.WarehousePostalCode)
-	fmt.Printf("Barcode: %s\n", receipt.TransactionBarcode)
-	fmt.Printf("Member: %s\n", receipt.MembershipNumber)
-	fmt.Println()
-
-	fmt.Println("Items:")
-	for _, item := range receipt.ItemArray {
-		fmt.Printf("  %s - %s %s\n", item.ItemNumber, item.ItemDescription01, item.ItemDescription02)
-		if item.Unit > 1 {
-			fmt.Printf("    Qty: %d @ $%.2f = $%.2f\n", item.Unit, item.ItemUnitPriceAmount, item.Amount)
-		} else {
-			fmt.Printf("    $%.2f\n", item.Amount)
-		}
-	}
-
-	fmt.Println()
-	fmt.Printf("Subtotal: $%.2f\n", receipt.SubTotal)
-	fmt.Printf("Tax: $%.2f\n", receipt.Taxes)
-	fmt.Printf("Total: $%.2f\n", receipt.Total)
-
-	if len(receipt.TenderArray) > 0 {
-		fmt.Println("\nPayment:")
-		for _, tender := range receipt.TenderArray {
-			fmt.Printf("  %s (%s): $%.2f\n",
-				tender.TenderDescription, tender.DisplayAccountNumber, tender.AmountTender)
-		}
-	}
+Flags:
+`)
+	flag.PrintDefaults()
 }
