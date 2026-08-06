@@ -444,6 +444,30 @@ func TestDownloadHistory_ReportsProgress(t *testing.T) {
 	assert.Contains(t, strings.Join(messages, "\n"), "2024")
 }
 
+func TestDownloadHistory_StopsPromptlyWhenCancelled(t *testing.T) {
+	api := newFakeCostcoAPI()
+	client := newHistoryTestClient(t, api.start(t).URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	history, err := client.DownloadHistory(ctx, HistoryOptions{
+		Since:      mustDate(t, "2016-01-01"),
+		Until:      mustDate(t, "2024-12-31"),
+		WindowDays: 365,
+		Progress: func(message string) {
+			// Interrupt once the first window is done, as Ctrl-C would.
+			if strings.HasPrefix(message, "[2/") {
+				cancel()
+			}
+		},
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "2023", "the download should stop at the window it was interrupted in")
+	assert.Nil(t, history, "a cancelled download reports no result")
+}
+
 func TestDownloadHistory_ResumesFromStore(t *testing.T) {
 	api := newFakeCostcoAPI()
 	client := newHistoryTestClient(t, api.start(t).URL)

@@ -308,7 +308,7 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		testURL += req.URL.Path
 	}
 
-	newReq, err := http.NewRequest(req.Method, testURL, req.Body)
+	newReq, err := http.NewRequestWithContext(req.Context(), req.Method, testURL, req.Body)
 	if err != nil {
 		return nil, err
 	}
