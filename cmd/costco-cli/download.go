@@ -110,13 +110,15 @@ func runDownload(ctx context.Context, cfg downloadConfig, out io.Writer) error {
 	options.Store = store
 	if !cfg.Quiet {
 		options.Progress = func(message string) { fmt.Fprintln(out, message) }
+		fmt.Fprintf(out, "Downloading Costco history from %s to %s into %s\n\n",
+			options.Since.Format("2006-01-02"), options.Until.Format("2006-01-02"), store.Dir())
 	}
-
-	fmt.Fprintf(out, "Downloading Costco history from %s to %s into %s\n\n",
-		options.Since.Format("2006-01-02"), options.Until.Format("2006-01-02"), store.Dir())
 
 	history, err := costco.NewClient(clientConfig).DownloadHistory(ctx, options)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return fmt.Errorf("interrupted. Everything downloaded so far is saved in %s; re-run the same command to finish", store.Dir())
+		}
 		return err
 	}
 
