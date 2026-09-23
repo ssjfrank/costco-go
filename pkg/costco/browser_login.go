@@ -12,12 +12,14 @@ import (
 	"github.com/eshaffer321/costco-go/internal/browser"
 )
 
-const (
-	// SignInStartURL is the page the sign-in window opens on.
-	SignInStartURL = "https://www.costco.com/"
+// SignInStartURL is the page the sign-in window opens on: the order history in
+// Costco's account app. Signed out, it sends the user straight to the sign-in
+// page and back again afterwards. The account app then fetches the OAuth tokens
+// this library uses. Signing in from the home page lands elsewhere, and that
+// token request never happens.
+const SignInStartURL = "https://www.costco.com/myaccount/#/app/" + WCSClientID + "/ordersandpurchases"
 
-	defaultSignInTimeout = 10 * time.Minute
-)
+const defaultSignInTimeout = 10 * time.Minute
 
 // BrowserLoginOptions configures LoginWithBrowser.
 type BrowserLoginOptions struct {
@@ -90,14 +92,18 @@ func LoginWithBrowser(ctx context.Context, opts BrowserLoginOptions) (*TokenResp
 	session, err := browser.Launch(signInCtx, browser.LaunchOptions{
 		Path:     path,
 		Headless: opts.headless,
-		Args:     opts.browserArgs,
+		// Chrome reports any window with a DevTools port as automated
+		// (navigator.webdriver), and sign-in pages may refuse automated browsers.
+		// A person does the signing in here; the tool only reads the response.
+		Args: append([]string{"--disable-blink-features=AutomationControlled"}, opts.browserArgs...),
 	})
 	if err != nil {
 		return nil, signInError(ctx, opts, err)
 	}
 	defer session.Close()
 
-	opts.report("A browser window has opened on costco.com. Sign in there; it closes by itself when you are done.")
+	opts.report("A browser window has opened on Costco's sign-in page. Sign in there with any method you normally use;\n" +
+		"the window closes by itself once your order history starts loading.")
 
 	body, err := session.Capture(signInCtx, browser.ResponseWatch{
 		StartURL: opts.startURL,

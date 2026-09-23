@@ -19,11 +19,11 @@ func TestIsCostcoTokenURL(t *testing.T) {
 	cases := map[string]bool{
 		TokenEndpoint: true,
 		"https://signin.costco.com/e0714dd4-784d-46d6-a278-3e29553483eb/b2c_1a_sso_wcs_signup_signin_300/oauth2/v2.0/token": true,
-		"https://SIGNIN.costco.com/tenant/policy/oauth2/v2.0/token?p=x":                                                    true,
-		"http://signin.costco.com/tenant/policy/oauth2/v2.0/token":                                                         false,
-		"https://signin.costco.com.attacker.example/tenant/policy/oauth2/v2.0/token":                                       false,
-		"https://www.costco.com/oauth2/v2.0/token":                                                                         false,
-		"https://signin.costco.com/tenant/policy/oauth2/v2.0/authorize":                                                    false,
+		"https://SIGNIN.costco.com/tenant/policy/oauth2/v2.0/token?p=x":                                                     true,
+		"http://signin.costco.com/tenant/policy/oauth2/v2.0/token":                                                          false,
+		"https://signin.costco.com.attacker.example/tenant/policy/oauth2/v2.0/token":                                        false,
+		"https://www.costco.com/oauth2/v2.0/token":                                                                          false,
+		"https://signin.costco.com/tenant/policy/oauth2/v2.0/authorize":                                                     false,
 		"not a url": false,
 	}
 
@@ -64,14 +64,16 @@ func requireTestBrowser(t *testing.T) string {
 }
 
 // fakeCostcoSignIn serves a start page that leaves for a sign-in page and, on
-// its way back, redeems a code at the token endpoint, as costco.com does. When
-// tokenBody is empty the sign-in never completes.
+// its way back, redeems a code at the token endpoint, as costco.com does. Like a
+// cautious sign-in page, it refuses browsers that report themselves as
+// automated. When tokenBody is empty the sign-in never completes.
 func fakeCostcoSignIn(t *testing.T, tokenBody string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		script := `if (!location.search.includes("code=")) { location.href = "/signin"; }
+		script := `if (navigator.webdriver) { document.title = "automated browsers are not allowed"; }
+else if (!location.search.includes("code=")) { location.href = "/signin"; }
 else { fetch("/policy/oauth2/v2.0/token", {method: "POST"}); }`
 		if tokenBody == "" {
 			script = ``
