@@ -36,6 +36,10 @@ test_*.go
 # Config directory (contains personal credentials)
 .costco/
 
+# Downloaded purchase history and pasted token responses (personal data)
+costco-history/
+token.json
+
 # Environment files
 .env
 .env.local
