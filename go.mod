@@ -3,6 +3,7 @@ module github.com/eshaffer321/costco-go
 go 1.24.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	github.com/stretchr/testify v1.8.4
 )
