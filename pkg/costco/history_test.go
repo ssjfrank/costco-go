@@ -100,6 +100,11 @@ type fakeCostcoAPI struct {
 	detailBarcodes   []string
 	failDetailFor    map[string]bool
 	failReceiptLists bool
+
+	// rejectAuthAfter, when positive, answers every request after that many
+	// with 401, as Costco does once a session has been revoked.
+	rejectAuthAfter int
+	requestCount    int
 }
 
 func newFakeCostcoAPI() *fakeCostcoAPI {
@@ -127,6 +132,15 @@ func (f *fakeCostcoAPI) start(t *testing.T) *httptest.Server {
 }
 
 func (f *fakeCostcoAPI) handle(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.requestCount++
+	rejected := f.rejectAuthAfter > 0 && f.requestCount > f.rejectAuthAfter
+	f.mu.Unlock()
+	if rejected {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
 	var req GraphQLRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -466,6 +480,25 @@ func TestDownloadHistory_StopsPromptlyWhenCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Contains(t, err.Error(), "2023", "the download should stop at the window it was interrupted in")
 	assert.Nil(t, history, "a cancelled download reports no result")
+}
+
+func TestDownloadHistory_StopsWhenSignInIsLostInALaterWindow(t *testing.T) {
+	api := newFakeCostcoAPI()
+	// The newest window takes three requests: orders, the receipt list, and one
+	// receipt detail. Everything after that is rejected.
+	api.rejectAuthAfter = 3
+	client := newHistoryTestClient(t, api.start(t).URL)
+
+	history, err := client.DownloadHistory(context.Background(), HistoryOptions{
+		Since:      mustDate(t, "2022-01-01"),
+		Until:      mustDate(t, "2024-12-31"),
+		WindowDays: 365,
+		MaxRetries: 2,
+	})
+
+	require.ErrorIs(t, err, ErrNotAuthenticated, "a lost sign-in must surface so the caller can log in again")
+	assert.Nil(t, history)
+	assert.Equal(t, 4, api.requestCount, "a rejected sign-in is not retried and does not continue to later windows")
 }
 
 func TestDownloadHistory_ResumesFromStore(t *testing.T) {

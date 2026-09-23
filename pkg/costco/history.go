@@ -264,12 +264,12 @@ func (c *Client) DownloadHistory(ctx context.Context, opts HistoryOptions) (*His
 		label := fmt.Sprintf("[%d/%d] %s", i+1, len(windows), window)
 		// A failure in the newest window means the account or tokens are broken
 		// rather than the data being unavailable, so it stops the whole run.
-		fatal := i == 0
+		newest := i == 0
 
 		opts.report(label + ": online orders")
 		orders, err := c.downloadOrderWindow(ctx, window, opts)
 		if err != nil {
-			if fatal || isCancellation(err) {
+			if newest || isFatal(err) {
 				return nil, fmt.Errorf("fetching online orders for %s: %w", window, err)
 			}
 			history.warn(fmt.Sprintf("online orders for %s: %v", window, err))
@@ -280,7 +280,7 @@ func (c *Client) DownloadHistory(ctx context.Context, opts HistoryOptions) (*His
 		opts.report(label + ": warehouse receipts")
 		receipts, err := c.downloadReceiptWindow(ctx, window, opts)
 		if err != nil {
-			if fatal || isCancellation(err) {
+			if newest || isFatal(err) {
 				return nil, fmt.Errorf("fetching receipts for %s: %w", window, err)
 			}
 			history.warn(fmt.Sprintf("receipts for %s: %v", window, err))
@@ -351,7 +351,7 @@ func (c *Client) collectReceipts(ctx context.Context, history *History, receipts
 		if !opts.SkipReceiptDetails {
 			detail, err := c.downloadReceiptDetail(ctx, summary, opts)
 			switch {
-			case isCancellation(err):
+			case isFatal(err):
 				return added, err
 			case err != nil:
 				history.warn(fmt.Sprintf("receipt %s: %v", barcode, err))
@@ -457,7 +457,7 @@ func withRetries(ctx context.Context, retries int, delay time.Duration, fn func(
 		if err = fn(); err == nil {
 			return nil
 		}
-		if isCancellation(err) {
+		if isFatal(err) {
 			return err
 		}
 		if attempt == attempts {
@@ -476,10 +476,13 @@ func withRetries(ctx context.Context, retries int, delay time.Duration, fn func(
 	return err
 }
 
-// isCancellation reports whether an error came from the caller giving up, which
-// must never be retried or downgraded to a warning.
-func isCancellation(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+// isFatal reports whether an error will recur on every later request: the caller
+// gave up, or Costco stopped accepting the sign-in. Such errors must never be
+// retried or downgraded to a warning.
+func isFatal(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrNotAuthenticated)
 }
 
 func sortOrdersNewestFirst(orders []OnlineOrder) {
