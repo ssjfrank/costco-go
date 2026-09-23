@@ -11,6 +11,8 @@ analyse or archive years of purchases offline.
 
 ## Quick start
 
+中文用户请看分步指南：[docs/GUIDE.zh-CN.md](docs/GUIDE.zh-CN.md)
+
 ```bash
 # 1. Build
 go build -o costco-cli ./cmd/costco-cli
