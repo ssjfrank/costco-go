@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,15 +8,12 @@ import (
 	"github.com/eshaffer321/costco-go/pkg/costco"
 )
 
+// importTokens reads a whole sign-in from in: the block printed by the console
+// snippet, or the raw JSON response of Costco's token endpoint. It suits
+// redirected input ('costco-cli -cmd import-token < token.json'); interactive
+// sign-in goes through consoleSignIn instead.
 func importTokens(in io.Reader, out io.Writer) error {
-	fmt.Fprintln(out, "Paste the JSON response from the Costco token endpoint, then press Ctrl+D:")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "  How to get it:")
-	fmt.Fprintln(out, "  1. Log in to costco.com in your browser")
-	fmt.Fprintln(out, "  2. Open DevTools → Network → filter Fetch/XHR")
-	fmt.Fprintln(out, "  3. Search for 'token' and select the token endpoint request")
-	fmt.Fprintln(out, "  4. Copy the full Response body (JSON)")
-	fmt.Fprintln(out, "  5. Paste it here")
+	fmt.Fprintln(out, "Paste the sign-in printed by the Costco console command (or a token response JSON), then press Ctrl+D:")
 	fmt.Fprintln(out)
 
 	data, err := io.ReadAll(in)
@@ -25,12 +21,12 @@ func importTokens(in io.Reader, out io.Writer) error {
 		return fmt.Errorf("reading input: %w", err)
 	}
 
-	var resp costco.TokenResponse
-	if err = json.Unmarshal(data, &resp); err != nil {
-		return fmt.Errorf("parsing JSON: %w\n\nMake sure you copied the Response body (not the Headers)", err)
+	response, err := costco.ParseSignIn(string(data))
+	if err != nil {
+		return err
 	}
 
-	tokens, err := costco.ImportTokenResponse(&resp)
+	tokens, err := costco.ImportTokenResponse(response)
 	if err != nil {
 		return err
 	}

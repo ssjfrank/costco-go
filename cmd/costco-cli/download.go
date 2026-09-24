@@ -31,8 +31,7 @@ type downloadConfig struct {
 	SkipDetails bool
 	Force       bool
 	Quiet       bool
-	BrowserPath string
-	NoBrowser   bool
+	SignIn      signInConfig
 }
 
 // historyOptions resolves the configured date strings against now and converts
@@ -82,18 +81,16 @@ func runDownload(ctx context.Context, cfg downloadConfig, out io.Writer) error {
 		return err
 	}
 
-	signIn := func(ctx context.Context) error { return signInWithBrowser(ctx, cfg.BrowserPath, out) }
-
 	tokens, err := costco.LoadTokens()
 	if err != nil {
 		return fmt.Errorf("loading saved tokens: %w", err)
 	}
 	if needsSignIn(tokens, time.Now()) {
-		if cfg.NoBrowser {
+		if cfg.SignIn.NonInteractive {
 			return errors.New("not signed in to Costco. Run 'costco-cli -cmd login' first")
 		}
 		fmt.Fprintln(out, "You are not signed in to Costco yet, or your last sign-in has expired.")
-		if err := signIn(ctx); err != nil {
+		if err := signIn(ctx, cfg.SignIn, out); err != nil {
 			return err
 		}
 	}
@@ -126,8 +123,12 @@ func runDownload(ctx context.Context, cfg downloadConfig, out io.Writer) error {
 
 	// Costco can refuse a sign-in before its nominal expiry. Records already on
 	// disk are skipped on the second attempt, so the retry only fetches the rest.
+	signInAgain := func(ctx context.Context) error {
+		fmt.Fprintln(out, "\nCostco no longer accepts the saved sign-in. Sign in again to continue; everything downloaded so far is kept.")
+		return signIn(ctx, cfg.SignIn, out)
+	}
 	var history *costco.History
-	err = withSignInRetry(ctx, !cfg.NoBrowser, signIn, func(ctx context.Context) error {
+	err = withSignInRetry(ctx, !cfg.SignIn.NonInteractive, signInAgain, func(ctx context.Context) error {
 		var downloadErr error
 		history, downloadErr = costco.NewClient(clientConfig).DownloadHistory(ctx, options)
 		return downloadErr

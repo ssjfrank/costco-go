@@ -78,6 +78,18 @@ func TestImportTokens_MissingRefreshToken(t *testing.T) {
 	assert.ErrorContains(t, err, "refresh_token")
 }
 
+func TestImportTokens_AcceptsTheConsoleBlock(t *testing.T) {
+	withTempConfig(t)
+
+	exp := time.Now().Add(15 * time.Minute).Unix()
+	payload := fmt.Sprintf(`{"id_token":%q,"refresh_token":"refresh-abc","refresh_token_expires_in":7776000}`, buildImportTestJWT(exp))
+	block := "-----BEGIN COSTCO SIGN-IN-----\n" + base64.StdEncoding.EncodeToString([]byte(payload)) + "\n-----END COSTCO SIGN-IN-----\n"
+	var out bytes.Buffer
+
+	require.NoError(t, importTokens(strings.NewReader(block), &out))
+	assert.Contains(t, out.String(), "✓ Tokens saved")
+}
+
 func TestImportTokens_WritesToDisk(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, ".costco")
