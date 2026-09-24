@@ -13,15 +13,26 @@ analyse or archive years of purchases offline.
 
 中文用户请看分步指南：[docs/GUIDE.zh-CN.md](docs/GUIDE.zh-CN.md)
 
-1. In your usual browser, sign in at [costco.com](https://www.costco.com) and
-   open **Orders & Returns**.
-2. Press **F12** (Mac: **Cmd+Option+J**), open the **Console**, paste the
-   command from [Signing in](#signing-in) and press Enter. It copies your
-   sign-in to the clipboard.
-3. Build and run:
+1. Download the program. On a Mac, in Terminal (Apple Silicon and Intel alike):
 
 ```bash
-go build -o costco-cli ./cmd/costco-cli
+mkdir -p ~/costco && cd ~/costco
+ARCH=$(uname -m | sed 's/x86_64/amd64/')
+curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/latest/download/costco-cli-darwin-$ARCH"
+chmod +x costco-cli
+```
+
+   Linux and Windows builds are on the
+   [Releases](https://github.com/ssjfrank/costco-go/releases) page, or build from
+   source with Go 1.24+: `go build -o costco-cli ./cmd/costco-cli`.
+2. In your usual browser, sign in at [costco.com](https://www.costco.com) and
+   open **Orders & Returns**.
+3. Press **F12** (Mac: **Cmd+Option+J**), open the **Console**, paste the
+   command from [Signing in](#signing-in) and press Enter. It copies your
+   sign-in to the clipboard.
+4. Run it:
+
+```bash
 ./costco-cli
 ```
 
@@ -357,6 +368,28 @@ way, and persists them to `~/.costco/tokens.json`.
 ```bash
 go test ./... -v
 ```
+
+The browser tests launch a real Chrome/Edge and skip themselves when none is
+installed; `go test -short ./...` skips them explicitly.
+
+## Publishing binaries
+
+Pushing a version tag publishes a release. `.github/workflows/release.yml` runs
+the tests, builds macOS (Apple Silicon and Intel), Linux and Windows binaries
+with `scripts/build-release.sh`, and attaches them to a GitHub Release along
+with `SHA256SUMS`. Tags with a suffix, such as `v1.0.0-rc.1`, become
+pre-releases.
+
+```bash
+git tag v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+```
+
+The binaries are cross-compiled with CGO disabled. Go's linker ad-hoc signs
+darwin/arm64 binaries itself, which Apple Silicon requires before it will run
+them, so no Mac is needed to build. On a fork, enable GitHub Actions (the
+**Actions** tab) before pushing the tag; a tag pushed while Actions is off
+publishes nothing.
 
 ## License
 

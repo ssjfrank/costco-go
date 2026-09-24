@@ -6,23 +6,43 @@
 
 ## 开始之前
 
-- **Go 1.24 或更高版本**：从 [go.dev/dl](https://go.dev/dl/) 安装，装好后运行 `go version` 确认。
-- **git**
+- 一台 Mac（Apple 芯片 M1 及以后，或 Intel 芯片都可以）。
 - 任意一个带开发者工具的浏览器：Chrome、Edge、Firefox、Safari 都可以。
 
-> 下文命令以 macOS / Linux 为准。Windows 用户请把 `./costco-cli` 换成 `.\costco-cli.exe`。
+> 下文以 Mac 为准，命令都在"终端"（Terminal）里运行：按 **Cmd + 空格**，输入 `终端` 或 `Terminal` 回车即可打开。
 
-## 第 1 步：下载代码并编译（只需一次）
+## 第 1 步：下载程序（只需一次）
+
+把下面几行整段复制到终端里，回车：
 
 ```bash
-git clone https://github.com/ssjfrank/costco-go.git
-cd costco-go
-git checkout cursor/download-full-order-history-9b26
-go build -o costco-cli ./cmd/costco-cli
+mkdir -p ~/costco && cd ~/costco
+ARCH=$(uname -m | sed 's/x86_64/amd64/')
+curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/latest/download/costco-cli-darwin-$ARCH"
+chmod +x costco-cli
+./costco-cli -version
 ```
 
-Windows 最后一行改为：`go build -o costco-cli.exe ./cmd/costco-cli`
+看到类似 `costco-cli 1.0.0 (commit ...)` 就说明下载成功。程序和下载的数据都放在你个人目录下的 `costco` 文件夹里（`~/costco`）。
 
+- `uname -m` 会自动判断你的 Mac 是 Apple 芯片（`arm64`）还是 Intel 芯片（`amd64`），下载对应的版本。
+- 如果 `curl` 提示 `404`，说明还没有发布正式的 Release。把第三行换成临时下载地址再运行一次：
+
+  ```bash
+  curl -fL -o costco-cli "https://raw.githubusercontent.com/ssjfrank/costco-go/refs/heads/cursor/macos-download-9b26/costco-cli-darwin-$ARCH"
+  ```
+
+- 如果你是用浏览器下载的文件，而不是上面的 `curl`，Mac 可能会提示"无法打开，因为无法验证开发者"。在终端运行 `xattr -d com.apple.quarantine ~/costco/costco-cli` 即可。用 `curl` 下载不会遇到这个问题。
+- 以后每次使用，先运行 `cd ~/costco` 进入这个文件夹。
+
+> **想自己从源代码编译？** 安装 [Go 1.24+](https://go.dev/dl/) 和 git，然后运行：
+>
+> ```bash
+> git clone https://github.com/ssjfrank/costco-go.git && cd costco-go
+> git checkout cursor/download-full-order-history-9b26
+> go build -o costco-cli ./cmd/costco-cli
+> ```
+>
 > 这个分支合并进 `main` 之后，就不需要 `git checkout` 那一行了。
 
 ## 第 2 步：在浏览器里登录 Costco
@@ -54,7 +74,10 @@ Copied to your clipboard. Now run costco-cli.
 
 ## 第 4 步：运行软件
 
+回到终端运行：
+
 ```bash
+cd ~/costco
 ./costco-cli
 ```
 
@@ -112,13 +135,14 @@ costco-history/
 
 ## 以后怎么更新
 
-直接再运行一次 `./costco-cli`：
+直接再运行一次 `cd ~/costco && ./costco-cli`：
 
 - 已经下载过的收据会自动跳过，只下载新的。
 - 登录还有效就直接下载；过期了（大约 90 天）会提示你重做第 2、3 步，然后按回车继续。
 - 只想查最近的：`./costco-cli -since 2026-01-01`
 - 全部重新下载：`./costco-cli -force`
 - 只登录、不下载：`./costco-cli -cmd login`
+- 更新程序本身：重新运行第 1 步的下载命令即可，已下载的数据和登录状态都不受影响。
 
 ## 常见问题
 
@@ -148,7 +172,8 @@ costco-history/
 其他注意事项：
 
 - 剪贴板里的登录信息等同于你的 Costco 登录状态。导入后，建议随便复制一段别的文字把它覆盖掉；不要把它发给任何人。
-- 令牌保存在 `~/.costco/tokens.json`，下载的数据保存在 `costco-history`，两者都设置为只有你自己的系统账户可以读取。项目的 `.gitignore` 已经排除了 `costco-history/` 和 `token.json`。
+- 令牌保存在 `~/.costco/tokens.json`，下载的数据保存在 `~/costco/costco-history`，两者都设置为只有你自己的系统账户可以读取。如果你是在项目源代码目录里运行的，项目的 `.gitignore` 已经排除了 `costco-history/` 和 `token.json`。
+- 下载的程序可以用 Release 里的 `SHA256SUMS` 核对：`shasum -a 256 costco-cli`，结果应与 `SHA256SUMS` 里对应的那一行一致。
 - 收据里有会员号、地址和付款信息，**不要**把 `costco-history` 或 `tokens.json` 上传到网上或分享给别人。
 - 如果怀疑令牌泄露，先删除 `~/.costco/tokens.json`，再到 costco.com 退出登录并更新账户安全设置。已经发出的令牌能否立即作废由 Costco 决定，本工具无法控制；最迟大约 90 天后它会自然过期。
 

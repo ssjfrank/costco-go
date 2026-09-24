@@ -29,10 +29,16 @@ func main() {
 		browserLogin   = flag.Bool("browser-login", false, "Sign in through a browser window the tool opens, instead of the console command")
 		browserPath    = flag.String("browser", "", "Browser executable for -browser-login (default: auto-detect Chrome, Edge, Chromium or Brave)")
 		nonInteractive = flag.Bool("non-interactive", false, "Never ask for a sign-in; fail instead (for unattended runs)")
+		showVersion    = flag.Bool("version", false, "Print the version and exit")
 	)
 
 	flag.Usage = usage
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(versionString(commit))
+		return
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

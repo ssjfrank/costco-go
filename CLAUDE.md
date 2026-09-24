@@ -132,6 +132,8 @@ git tag vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
+The tag push triggers `.github/workflows/release.yml`, which tests, builds every platform with `scripts/build-release.sh` and publishes the GitHub Release. macOS users download from `releases/latest/download/costco-cli-darwin-<arch>`, which skips pre-releases, so only a plain `vX.Y.Z` tag updates what they get.
+
 ### Versioning Checklist
 
 Before releasing a new version, ensure:
