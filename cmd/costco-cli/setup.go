@@ -63,7 +63,7 @@ func setupCredentials() error {
 	fmt.Println("\n✓ Configuration saved to ~/.costco/config.json")
 	fmt.Println("\nSetup complete! Next, run:")
 	fmt.Println("  costco-cli")
-	fmt.Println("\nA browser window opens for you to sign in, then the download starts.")
+	fmt.Println("\nIt shows you how to sign in, then the download starts.")
 
 	return nil
 }

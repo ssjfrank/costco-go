@@ -12,7 +12,12 @@ Scope discipline matters here. Features that are not part of "download everythin
 
 Costco's OAuth2 endpoint requires the Authorization Code flow with PKCE, which needs a browser. Password grant (`grant_type=password`) does not work and was removed in 0.3.11.
 
-A local redirect listener is not an option either: Costco's client only accepts its own registered `https://www.costco.com/...` redirect URIs. Instead, `LoginWithBrowser` (`pkg/costco/browser_login.go`, driving `internal/browser`) launches the user's Chrome/Edge/Chromium/Brave with a throwaway profile and lets the user sign in by hand. It then reads the token response costco.com itself receives, over the DevTools protocol. Facts this depends on, verified against the live site in September 2026:
+A local redirect listener is not an option either: Costco's client only accepts its own registered `https://www.costco.com/...` redirect URIs. Two ways in exist instead:
+
+- **Console command (default)** — `pkg/costco/console_signin.go`. The user signs in in their own browser, opens Orders & Returns, and runs `ConsoleSnippet()` in DevTools. It reads the MSAL.js 2.x cache entries (`credentialType` `IdToken`/`RefreshToken`, `clientId` = `ClientID`) from `sessionStorage`/`localStorage`, refreshes them against `TokenEndpoint`, and copies a `-----BEGIN COSTCO SIGN-IN-----` block of 64-character base64 lines. The short lines exist because macOS terminals truncate a pasted line at 1024 bytes. The CLI reads the block from the clipboard or a paste (`cmd/costco-cli/console_signin.go`). The README and the Chinese guide embed the snippet verbatim; `TestDocsShowTheCurrentConsoleSnippet` fails if they drift, so regenerate them with `costco-cli -cmd snippet` after changing it.
+- **`-browser-login`** — `LoginWithBrowser` (`pkg/costco/browser_login.go`, driving `internal/browser`) launches the user's Chrome/Edge/Chromium/Brave with a throwaway profile and lets the user sign in by hand, then reads the token response costco.com itself receives over the DevTools protocol.
+
+Facts both depend on, verified against the live site in September 2026:
 
 - The home page's **Sign In** link runs a server-side flow (client `4900eb1f…`, `response_mode=form_post` to `/OAuthLogonCmd`). No token response ever reaches the browser, so capturing from there waits forever.
 - The **order history** (`/myaccount/#/app/<WCSClientID>/ordersandpurchases`) redirects signed-out users to the same sign-in page and returns them to the MSAL account app. That app then POSTs to `signin.costco.com/.../oauth2/v2.0/token` and receives the `id_token` + `refresh_token` this library uses. `SignInStartURL` points there for that reason.
@@ -27,12 +32,15 @@ costco-go/
 ├── cmd/costco-cli/           # CLI application
 │   ├── main.go               # Flag parsing and command dispatch
 │   ├── download.go           # The download command
-│   ├── signin.go             # Automatic sign-in and sign-in retry
+│   ├── signin.go             # Sign-in dispatch and sign-in retry
+│   ├── console_signin.go     # Console-command sign-in: clipboard or paste
+│   ├── clipboard.go          # Reading the system clipboard
 │   ├── setup.go              # Email/warehouse configuration
 │   └── import.go             # Manual token import (fallback)
 ├── internal/browser/         # Minimal DevTools driver: launch, capture one response
 ├── pkg/costco/               # Core library package
 │   ├── client.go             # HTTP client, token refresh, GraphQL primitives
+│   ├── console_signin.go     # ConsoleSnippet and ParseSignIn
 │   ├── browser_login.go      # LoginWithBrowser: Costco sign-in via browser window
 │   ├── history.go            # Full-history download, date windowing, retries
 │   ├── store.go              # FileStore: on-disk JSON output and resume

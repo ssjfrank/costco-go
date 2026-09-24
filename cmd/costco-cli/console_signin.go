@@ -102,7 +102,7 @@ func (s consoleSignIn) printInstructions() {
 
   1. In your usual browser, sign in at https://www.costco.com and open Orders & Returns.
   2. Press F12 (Mac: Cmd+Option+J) to open the Console, paste the command below and press Enter.
-     If the browser asks, type "allow pasting" and press Enter first.
+     If the browser blocks the paste, type the words it asks for ("allow pasting" in English) first.
 
 %s
 
