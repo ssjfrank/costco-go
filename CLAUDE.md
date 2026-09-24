@@ -25,6 +25,8 @@ Facts both depend on, verified against the live site in September 2026:
 
 `costco-cli -cmd import-token` remains as the manual fallback. The stored refresh token is then used automatically (~90 day lifetime), and `ErrNotAuthenticated` signals when a new sign-in is needed.
 
+Tokens live in one file, `~/.costco/tokens.json` unless `COSTCO_TOKEN_FILE` says otherwise. The container image sets it to `/secrets/tokens.json` and expects the file bind-mounted on its own. `SaveTokens` must therefore keep rewriting the file in place: a write-to-temp-and-rename would fail on such a mount, and `TestSaveTokens_RewritesTheFileInPlace` guards this.
+
 ## Project Structure
 
 ```
@@ -51,6 +53,8 @@ costco-go/
 │   ├── constants.go          # API constants and configuration
 │   └── *_test.go             # Test files
 ├── examples/                 # Runnable examples (.txt so they stay out of the build)
+├── scripts/build-release.sh  # Cross-platform release builds (used by release.yml)
+├── Dockerfile                # Distroless image; runs with a mounted token file
 ├── CHANGELOG.md              # Version history
 ├── README.md                 # User documentation
 └── go.mod                    # Go module definition

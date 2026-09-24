@@ -144,6 +144,50 @@ costco-history/
 - 只登录、不下载：`./costco-cli -cmd login`
 - 更新程序本身：重新运行第 1 步的下载命令即可，已下载的数据和登录状态都不受影响。
 
+## 在 Docker 容器里运行（可选）
+
+登录信息保存在一个文件里：`~/.costco/tokens.json`。下载只需要这个文件，所以可以在 Mac 上登录一次，然后在容器里运行下载，只把这个文件挂载进去。需要先安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。
+
+1. **先在 Mac 上登录一次**，生成登录文件（按上面的第 1～4 步，或者运行 `./costco-cli -cmd login`）。登录成功后会显示文件位置：
+
+   ```
+   ✓ Signed in. You won't need to sign in again until about 2026-12-23.
+     Saved to /Users/你的用户名/.costco/tokens.json
+   ```
+
+   想把文件放在别处，登录时指定路径即可：
+
+   ```bash
+   COSTCO_TOKEN_FILE="$HOME/costco/tokens.json" ./costco-cli -cmd login
+   ```
+
+2. **构建镜像**（只需一次，直接从 GitHub 构建，不用下载源代码）：
+
+   ```bash
+   docker build -t costco-cli "https://github.com/ssjfrank/costco-go.git#cursor/download-full-order-history-9b26"
+   ```
+
+3. **运行下载**，把登录文件和输出目录挂载进去：
+
+   ```bash
+   mkdir -p "$HOME/costco"
+   docker run --rm \
+     --user "$(id -u):$(id -g)" \
+     --mount type=bind,source="$HOME/.costco/tokens.json",target=/secrets/tokens.json \
+     -v "$HOME/costco:/data" \
+     costco-cli
+   ```
+
+   下载结果在 `~/costco/costco-history`，和直接在 Mac 上运行时一样。需要加参数的话写在最后，例如 `costco-cli -since 2026-01-01`。
+
+注意事项：
+
+- **容器里不能登录。** 容器里没人能回答登录提示，所以登录过期时会直接报错，并告诉你要替换哪个文件，例如 `Replace /secrets/tokens.json with a fresh sign-in`。这时回到 Mac 上运行 `./costco-cli -cmd login` 重新登录，再运行容器即可。
+- **挂载登录文件用 `--mount`，不要用 `-v`。** 如果文件还不存在，`-v` 会在你的 Mac 上悄悄创建一个同名**文件夹**，之后登录也会失败，直到你把它删掉；`--mount` 则会直接报错，什么都不创建。如果已经遇到这种情况，程序会提示 `... is a directory, not a token file`，删掉那个文件夹、重新登录即可。
+- **登录文件要可写。** 每次刷新令牌时，程序会把新令牌写回这个文件。只读挂载也能用，但刷新后的令牌不会保存，登录的有效期不会因为使用而延长。
+- **`--user "$(id -u):$(id -g)"` 保留着就好。** 它让容器用你自己的身份读写文件，下载的文件也归你所有。
+- 构建镜像时，`costco-history/`、`token.json`、`.costco/` 都会被排除，你的个人数据不会被打包进镜像。
+
 ## 常见问题
 
 | Console 或终端里的提示 | 解决办法 |

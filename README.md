@@ -372,6 +372,51 @@ go test ./... -v
 The browser tests launch a real Chrome/Edge and skip themselves when none is
 installed; `go test -short ./...` skips them explicitly.
 
+## Running in a container
+
+The token file is all a download needs, so a container can run with just that
+file mounted. Sign in on your own machine first (see
+[Signing in](#signing-in)); nobody can answer a sign-in prompt inside the
+container, so it runs with `-non-interactive` and stops with instructions when
+the token needs renewing.
+
+```bash
+# Once: build the image straight from GitHub (no clone needed).
+docker build -t costco-cli "https://github.com/ssjfrank/costco-go.git#cursor/download-full-order-history-9b26"
+
+# Each download: mount the token file and an output directory.
+mkdir -p "$HOME/costco"
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,source="$HOME/.costco/tokens.json",target=/secrets/tokens.json \
+  -v "$HOME/costco:/data" \
+  costco-cli
+```
+
+The history lands in `~/costco/costco-history`. Extra flags go at the end, for
+example `costco-cli -since 2026-01-01`.
+
+- **Where the token file lives.** Signing in writes `~/.costco/tokens.json`.
+  To keep it somewhere else, set `COSTCO_TOKEN_FILE` when signing in, and
+  mount that path instead:
+  `COSTCO_TOKEN_FILE="$HOME/costco/tokens.json" ./costco-cli -cmd login`.
+  Inside the image, `COSTCO_TOKEN_FILE` is `/secrets/tokens.json`.
+- **Mount the file read-write.** Every token refresh writes a new refresh
+  token back to the file, in place, which a single-file mount allows. A
+  `readonly` mount still works, but the refreshed token is lost when the
+  container exits. The saved refresh token then ages until it expires.
+- **Use `--mount`, not `-v`, for the token file.** If the file does not exist
+  yet, `-v` silently creates a directory with that name on your machine, and
+  that directory breaks later sign-ins until you delete it. `--mount` refuses
+  to start instead. The program recognises the directory and says so.
+- **`--user "$(id -u):$(id -g)"`** lets the container read the owner-only
+  token file on Linux and makes the downloaded files yours. On Docker Desktop
+  for Mac it does no harm.
+- The image is built from `gcr.io/distroless/static-debian12:nonroot`: the
+  static binary, CA certificates, and nothing else (about 16 MB). The build
+  context excludes `costco-history/`, `token.json` and `.costco/`, so personal
+  data never ends up in an image.
+
 ## Publishing binaries
 
 Pushing a version tag publishes a release. `.github/workflows/release.yml` runs
