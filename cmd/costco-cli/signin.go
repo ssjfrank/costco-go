@@ -40,7 +40,8 @@ func withSignInRetry(ctx context.Context, allowSignIn bool, signIn, attempt func
 		return err
 	}
 	if !allowSignIn {
-		return fmt.Errorf("%w. Run 'costco-cli -cmd login' to sign in again", err)
+		return fmt.Errorf("%w. Replace %s with a fresh sign-in: run 'costco-cli -cmd login' on a machine with your browser",
+			err, tokenFileForMessages())
 	}
 
 	if err := signIn(ctx); err != nil {
@@ -49,10 +50,25 @@ func withSignInRetry(ctx context.Context, allowSignIn bool, signIn, attempt func
 	return attempt(ctx)
 }
 
+// notSignedInError explains, for runs that cannot ask, which token file needs
+// replacing. In a container that is the mounted file, refreshed on the host.
+func notSignedInError() error {
+	return fmt.Errorf("%w: no usable sign-in in %s. Run 'costco-cli -cmd login' on a machine with your browser to create a fresh one",
+		costco.ErrNotAuthenticated, tokenFileForMessages())
+}
+
+func tokenFileForMessages() string {
+	path, err := costco.TokenFilePath()
+	if err != nil {
+		return "the token file"
+	}
+	return path
+}
+
 // signIn gets a new sign-in the configured way and saves it.
 func signIn(ctx context.Context, cfg signInConfig, out io.Writer) error {
 	if cfg.NonInteractive {
-		return fmt.Errorf("%w. Run 'costco-cli -cmd login' to sign in", costco.ErrNotAuthenticated)
+		return notSignedInError()
 	}
 	if cfg.BrowserLogin {
 		return signInWithBrowser(ctx, cfg.BrowserPath, out)
@@ -96,7 +112,8 @@ func saveSignIn(response *costco.TokenResponse, out io.Writer) error {
 		return fmt.Errorf("saving tokens: %w", err)
 	}
 
-	fmt.Fprintf(out, "✓ Signed in. You won't need to sign in again until about %s.\n\n",
-		tokens.RefreshTokenExpiresAt.Format("2006-01-02"))
+	path, _ := costco.TokenFilePath()
+	fmt.Fprintf(out, "✓ Signed in. You won't need to sign in again until about %s.\n  Saved to %s\n\n",
+		tokens.RefreshTokenExpiresAt.Format("2006-01-02"), path)
 	return nil
 }

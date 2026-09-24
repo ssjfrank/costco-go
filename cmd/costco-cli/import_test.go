@@ -90,6 +90,20 @@ func TestImportTokens_AcceptsTheConsoleBlock(t *testing.T) {
 	assert.Contains(t, out.String(), "✓ Tokens saved")
 }
 
+func TestImportTokens_ReportsTheTokenFileItWrote(t *testing.T) {
+	withTempConfig(t)
+	tokenPath := filepath.Join(t.TempDir(), "secrets", "tokens.json")
+	t.Setenv("COSTCO_TOKEN_FILE", tokenPath)
+
+	exp := time.Now().Add(15 * time.Minute).Unix()
+	var out bytes.Buffer
+	require.NoError(t, importTokens(strings.NewReader(tokenJSON(t, exp)), &out))
+
+	assert.Contains(t, out.String(), tokenPath)
+	_, err := os.Stat(tokenPath)
+	assert.NoError(t, err)
+}
+
 func TestImportTokens_WritesToDisk(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, ".costco")

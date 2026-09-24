@@ -35,7 +35,8 @@ func importTokens(in io.Reader, out io.Writer) error {
 		return fmt.Errorf("saving tokens: %w", err)
 	}
 
-	fmt.Fprintln(out, "✓ Tokens saved to ~/.costco/tokens.json")
+	path, _ := costco.TokenFilePath()
+	fmt.Fprintf(out, "✓ Tokens saved to %s\n", path)
 	fmt.Fprintf(out, "  ID token valid until:      %s\n", tokens.TokenExpiry.Format("2006-01-02 15:04:05 MST"))
 	fmt.Fprintf(out, "  Refresh token valid until: %s\n", tokens.RefreshTokenExpiresAt.Format("2006-01-02 15:04:05 MST"))
 	return nil

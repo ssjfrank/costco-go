@@ -21,6 +21,16 @@ func TestNeedsSignIn(t *testing.T) {
 	assert.False(t, needsSignIn(&costco.StoredTokens{RefreshTokenExpiresAt: now.Add(24 * time.Hour)}, now))
 }
 
+func TestNotSignedInError_NamesTheTokenFile(t *testing.T) {
+	t.Setenv("COSTCO_TOKEN_FILE", "/secrets/tokens.json")
+
+	err := notSignedInError()
+
+	require.ErrorIs(t, err, costco.ErrNotAuthenticated)
+	assert.Contains(t, err.Error(), "/secrets/tokens.json", "a container user needs to know which file to replace")
+	assert.Contains(t, err.Error(), "-cmd login")
+}
+
 func notSignedIn() error {
 	return fmt.Errorf("fetching online orders: %w", costco.ErrNotAuthenticated)
 }
@@ -56,6 +66,7 @@ func TestWithSignInRetry_DoesNotLoopWhenSignInDoesNotHelp(t *testing.T) {
 }
 
 func TestWithSignInRetry_WithoutBrowserExplainsHowToSignIn(t *testing.T) {
+	t.Setenv("COSTCO_TOKEN_FILE", "/secrets/tokens.json")
 	signIns := 0
 
 	err := withSignInRetry(context.Background(), false,
@@ -64,6 +75,7 @@ func TestWithSignInRetry_WithoutBrowserExplainsHowToSignIn(t *testing.T) {
 
 	require.ErrorIs(t, err, costco.ErrNotAuthenticated)
 	assert.Contains(t, err.Error(), "-cmd login")
+	assert.Contains(t, err.Error(), "/secrets/tokens.json", "a container user needs to know which file to replace")
 	assert.Zero(t, signIns)
 }
 
