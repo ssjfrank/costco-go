@@ -1,0 +1,15 @@
+# Personal data and credentials must never end up in the build context or image.
+costco-history/
+token.json
+tokens.json
+.costco/
+
+# Build output and local tooling
+dist/
+bin/
+costco-cli
+*.test
+.git/
+.github/
+.vscode/
+.idea/

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,15 @@ import (
 )
 
 // Constants moved to constants.go for better organization
+
+// ErrNoOrderData is returned by GetOnlineOrders when the API responds without an
+// orders payload, which is how a date range containing no orders is reported.
+var ErrNoOrderData = errors.New("no order data returned")
+
+// ErrNotAuthenticated means Costco no longer accepts the stored tokens, or there
+// are none. Signing in again (LoginWithBrowser or a token import) is the only fix,
+// so callers should not retry a request that failed with it.
+var ErrNotAuthenticated = errors.New("not signed in to Costco")
 
 type Client struct {
 	httpClient  *http.Client
@@ -91,7 +101,6 @@ func NewClient(config Config) *Client {
 	return client
 }
 
-
 func (c *Client) calculateTokenExpiry(tokenString string) time.Time {
 	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
 	if err != nil {
@@ -129,7 +138,7 @@ func (c *Client) refreshTokenIfNeeded() error {
 		return c.refreshToken()
 	}
 
-	return fmt.Errorf("no valid tokens available. Run 'costco-cli -cmd import-token' to import tokens from your browser")
+	return fmt.Errorf("%w: no valid tokens available. Run 'costco-cli -cmd login' to sign in", ErrNotAuthenticated)
 }
 
 func (c *Client) refreshToken() error {
@@ -179,7 +188,13 @@ func (c *Client) refreshToken() error {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.getLogger().Error("token refresh failed", slog.Int("status_code", resp.StatusCode), slog.String("body", string(body)))
-		return fmt.Errorf("token refresh failed with status %d: %s. Run 'costco-cli -cmd import-token' to re-import tokens", resp.StatusCode, string(body))
+		// A 4xx means the refresh token itself was refused (expired or revoked);
+		// anything else is an outage that a later retry may get through.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return fmt.Errorf("%w: token refresh rejected with status %d: %s. Run 'costco-cli -cmd login' to sign in again",
+				ErrNotAuthenticated, resp.StatusCode, string(body))
+		}
+		return fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var tokenResp TokenResponse
@@ -273,6 +288,9 @@ func (c *Client) executeGraphQL(ctx context.Context, query string, variables map
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.getLogger().Error("graphql request failed", slog.Int("status_code", resp.StatusCode))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("%w: request rejected with status %d", ErrNotAuthenticated, resp.StatusCode)
+		}
 		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -341,7 +359,7 @@ func (c *Client) GetOnlineOrders(ctx context.Context, startDate, endDate string,
 	}
 
 	if len(result.GetOnlineOrders) == 0 {
-		return nil, fmt.Errorf("no order data returned")
+		return nil, ErrNoOrderData
 	}
 
 	orderCount := len(result.GetOnlineOrders[0].BCOrders)
@@ -365,7 +383,8 @@ func (c *Client) GetOnlineOrders(ctx context.Context, startDate, endDate string,
 // Returns:
 //   - ReceiptsWithCountsResponse containing receipts and counts by type
 //
-// Note: The date format for receipts differs from online orders (M/DD/YYYY vs YYYY-MM-DD).
+// Note: Costco's receipt API expects M/DD/YYYY. Dates given as YYYY-MM-DD are
+// converted automatically, so either format may be passed.
 //
 // Example:
 //
@@ -379,6 +398,9 @@ func (c *Client) GetOnlineOrders(ctx context.Context, startDate, endDate string,
 //	        receipt.TransactionDateTime, receipt.Total)
 //	}
 func (c *Client) GetReceipts(ctx context.Context, startDate, endDate, documentType, documentSubType string) (*ReceiptsWithCountsResponse, error) {
+	startDate = normalizeReceiptDate(startDate)
+	endDate = normalizeReceiptDate(endDate)
+
 	c.getLogger().Info("fetching receipts",
 		slog.String("start_date", startDate),
 		slog.String("end_date", endDate),
@@ -399,6 +421,9 @@ func (c *Client) GetReceipts(ctx context.Context, startDate, endDate, documentTy
 	}
 
 	if err := c.executeGraphQL(ctx, ReceiptsQuery, variables, &resultObject); err != nil {
+		if isFatal(err) {
+			return nil, err
+		}
 		// TODO: If this fallback is never hit over time, we can remove the array format code entirely.
 		// The array format may have been from API changes or incorrect assumptions during initial development.
 		// Monitor logs for the "🚨 ARRAY FALLBACK" message - if it never appears, delete this fallback code.
@@ -410,7 +435,7 @@ func (c *Client) GetReceipts(ctx context.Context, startDate, endDate, documentTy
 			ReceiptsWithCounts []ReceiptsWithCountsResponse `json:"receiptsWithCounts"`
 		}
 		if err2 := c.executeGraphQL(ctx, ReceiptsQuery, variables, &resultArray); err2 != nil {
-			return nil, fmt.Errorf("failed to decode as object: %v, and as array: %v", err, err2)
+			return nil, fmt.Errorf("failed to decode as object: %w, and as array: %w", err, err2)
 		}
 
 		if len(resultArray.ReceiptsWithCounts) == 0 {

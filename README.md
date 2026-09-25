@@ -1,429 +1,440 @@
 # Costco Go Client
 
-[![Version](https://img.shields.io/badge/version-0.3.11-blue.svg)](https://github.com/eshaffer321/costco-go/releases/tag/v0.3.11)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/eshaffer321/costco-go/releases/tag/v1.0.0)
 
-A Go client library and CLI for accessing Costco order history and receipt data via their GraphQL API.
+Download your complete Costco purchase history — every online order and every
+warehouse receipt, down to the individual line items — into local JSON files.
 
-## Features
+Costco's website only shows a few months at a time behind a date picker. This
+tool walks the entire history for you and writes it to disk, so you can search,
+analyse or archive years of purchases offline.
 
-- OAuth2 authentication with automatic token refresh
-- Get online order history
-- Get warehouse receipts
-- Get detailed receipt information with line items
-- Command-line interface
-- JSON output support
-- Test-driven development with comprehensive test coverage
+## Quick start
 
-## Installation
+中文用户请看分步指南：[docs/GUIDE.zh-CN.md](docs/GUIDE.zh-CN.md)
 
-Install the latest version:
+1. Download the program. On a Mac, in Terminal (Apple Silicon and Intel alike):
 
 ```bash
-go get github.com/costco-go/pkg/costco
+mkdir -p ~/costco && cd ~/costco
+ARCH=$(uname -m | sed 's/x86_64/amd64/')
+curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/latest/download/costco-cli-darwin-$ARCH"
+chmod +x costco-cli
 ```
 
-Or install a specific version:
+   Linux and Windows builds are on the
+   [Releases](https://github.com/ssjfrank/costco-go/releases) page, or build from
+   source with Go 1.24+: `go build -o costco-cli ./cmd/costco-cli`.
+2. In your usual browser, sign in at [costco.com](https://www.costco.com) and
+   open **Orders & Returns**.
+3. Press **F12** (Mac: **Cmd+Option+J**), open the **Console**, paste the
+   command from [Signing in](#signing-in) and press Enter. It copies your
+   sign-in to the clipboard.
+4. Run it:
 
 ```bash
-go get github.com/costco-go/pkg/costco@v0.1.0
+./costco-cli
 ```
 
-## Library Usage
+It picks the sign-in up from the clipboard and starts downloading:
+
+```
+You are not signed in to Costco yet, or your last sign-in has expired.
+Found a Costco sign-in in your clipboard.
+✓ Signed in. You won't need to sign in again until about 2026-12-22.
+
+Downloading Costco history from 2016-09-24 to 2026-09-24 into costco-history
+
+[1/11] 2025-08-07 to 2026-08-06: online orders
+[1/11] 2025-08-07 to 2026-08-06: 34 online order(s)
+[1/11] 2025-08-07 to 2026-08-06: warehouse receipts
+[1/11] 2025-08-07 to 2026-08-06: 52 receipt(s)
+...
+
+Downloaded 214 online orders and 388 warehouse receipts (7431 receipt line items)
+  Date range:          2016-08-06 to 2026-08-06
+  Online order total:  $41203.87
+  Receipt total:       $76914.02
+  Saved to:            costco-history
+  Start here:          costco-history/manifest.json
+```
+
+It reaches back ten years and writes everything it finds into
+`./costco-history`. Later runs reuse the sign-in for about 90 days. When it
+runs out, `costco-cli` shows the steps and the command again and waits for you
+to press Enter. Running `costco-cli` first and doing the browser steps while it
+waits works just as well.
+
+## What you get
+
+```
+costco-history/
+├── manifest.json          Summary and index of everything below
+├── orders.json            Every online order in one array
+├── receipts.json          Every receipt in one array, with line items
+├── orders/
+│   └── <order number>.json
+└── receipts/
+    └── <barcode>.json
+```
+
+`manifest.json` is the place to start — it holds the totals, the date range, any
+records that could not be downloaded, and a one-line entry per file:
+
+```json
+{
+  "library_version": "1.0.0",
+  "generated_at": "2026-08-06T09:14:22Z",
+  "since": "2016-08-06",
+  "until": "2026-08-06",
+  "order_count": 214,
+  "receipt_count": 388,
+  "item_count": 7431,
+  "online_order_total": 41203.87,
+  "warehouse_receipt_total": 76914.02,
+  "receipts": [
+    {
+      "id": "21134300501862509051323",
+      "date": "2026-08-01",
+      "total": 269.13,
+      "description": "MERIDIAN",
+      "file": "receipts/21134300501862509051323.json"
+    }
+  ]
+}
+```
+
+Each receipt file contains the full transaction: warehouse and address, every
+line item with quantity and price, the tax breakdown, payment method, instant
+savings and the membership number.
+
+## Resuming and updating
+
+Receipts are written to disk the moment they arrive, and every run skips
+receipts that are already saved. That means:
+
+- **An interrupted download costs nothing.** Press Ctrl-C, re-run the same
+  command, and it picks up only what is missing.
+- **Keeping the archive current is cheap.** Re-running later fetches only new
+  receipts. Add `-since` to narrow the scan: `./costco-cli -since 2026-01-01`.
+- **Individual failures do not sink the run.** If one receipt is unavailable,
+  it is listed at the end and the command exits non-zero; re-running retries
+  just those. Use `-force` to re-download records that are already saved.
+
+## CLI flags
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `-cmd` | `download` | `download`, `login`, `snippet`, `setup`, `import-token` or `info` |
+| `-out` | `costco-history` | Directory to write into |
+| `-since` | 10 years ago | Earliest date to download (`YYYY-MM-DD`) |
+| `-until` | today | Latest date to download (`YYYY-MM-DD`) |
+| `-window` | `365` | Maximum days requested per API call |
+| `-page-size` | `50` | Online orders requested per page |
+| `-delay` | `250ms` | Pause between API calls |
+| `-retries` | `3` | Retries per failed API call |
+| `-no-items` | off | Skip per-receipt line item lookups (much faster, less detail) |
+| `-force` | off | Re-download receipts that are already saved |
+| `-quiet` | off | Print only the final summary |
+| `-browser-login` | off | Sign in through a browser window the tool opens, instead of the console command |
+| `-browser` | auto-detect | Chrome, Edge, Chromium or Brave executable for `-browser-login` |
+| `-non-interactive` | off | Never ask for a sign-in; fail instead (for unattended runs) |
+
+If a wide date range gets rejected by Costco's API, narrow the window:
+`./costco-cli -window 90`.
+
+## Signing in
+
+Costco's sign-in has to happen in a browser, so you do it in yours, the way you
+always do (password, passkey, security key or passcode). Then:
+
+1. Open **Orders & Returns**. That page holds the sign-in this tool needs.
+2. Press **F12** (Mac: **Cmd+Option+J**; Safari: enable *Show features for web
+   developers* in Settings → Advanced, then **Cmd+Option+C**) and open the
+   **Console** tab.
+3. Paste this command and press Enter. If the browser blocks the paste, type
+   the words it asks for first ("allow pasting" in English).
+
+```js
+(async () => { const CLIENT = "a3a5186b-7c89-4b4c-93a8-dd604e930757", TOKEN_URL = "https://signin.costco.com/e0714dd4-784d-46d6-a278-3e29553483eb/b2c_1a_sso_wcs_signup_signin_209/oauth2/v2.0/token"; const toClipboard = typeof copy === "function" ? copy : null; const found = {}; let others = 0; for (const store of [sessionStorage, localStorage]) { for (let i = 0; i < store.length; i++) { let entry; try { entry = JSON.parse(store.getItem(store.key(i))); } catch (e) { continue; } if (!entry || !entry.secret || !/^(IdToken|RefreshToken)$/.test(entry.credentialType)) continue; if (entry.clientId !== CLIENT) { others++; continue; } found[entry.credentialType] = entry.secret; } } if (!found.RefreshToken) { console.error(others ? "This page has a sign-in for a different Costco app. Open Orders & Returns and run this again." : "No Costco sign-in on this page. Sign in, open Orders & Returns, then run this again."); return; } let tokens, response; try { response = await fetch(TOKEN_URL, {method: "POST", body: new URLSearchParams({client_id: CLIENT, grant_type: "refresh_token", refresh_token: found.RefreshToken})}); const text = await response.text(); try { tokens = JSON.parse(text); } catch (e) { tokens = {}; } } catch (e) { if (!found.IdToken) { console.error("Could not reach Costco: " + e); return; } console.warn("Could not reach Costco to refresh the sign-in; using the one on this page."); tokens = {id_token: found.IdToken, refresh_token: found.RefreshToken, refresh_token_expires_in: 7776000}; } if (response && (!response.ok || !tokens.refresh_token)) { console.error("Costco refused the sign-in (" + (tokens.error_description || tokens.error || response.status) + "). Sign out, sign in again and rerun this."); return; } const block = "-----BEGIN COSTCO SIGN-IN-----\n" + btoa(unescape(encodeURIComponent(JSON.stringify(tokens)))).match(/.{1,64}/g).join("\n") + "\n-----END COSTCO SIGN-IN-----"; if (toClipboard) toClipboard(block); console.log(block + "\n\n" + (toClipboard ? "Copied to your clipboard. " : "Copy everything from BEGIN to END. ") + "Now run costco-cli."); return block; })()
+```
+
+4. Run `./costco-cli` (or press Enter, if it is already waiting).
+
+The command finds the sign-in that Costco's order history app keeps in the
+page's storage. It asks Costco's own sign-in server for fresh tokens with it,
+exactly as the app itself does, then prints them as a short block and copies
+that block to your clipboard. `costco-cli` reads the block from the clipboard
+(`pbpaste`, PowerShell `Get-Clipboard`, `wl-paste`, `xclip` or `xsel`), or you
+can paste it into the terminal. The block is split into short lines because
+macOS terminals cut a pasted line off at 1024 characters, and a token is
+several KB. `./costco-cli -cmd snippet` prints the command whenever you need it.
+
+After that, tokens refresh automatically for about 90 days. When Costco stops
+accepting them, the next run shows the steps again and waits; a download
+interrupted that way resumes where it stopped. `./costco-cli -cmd login` signs
+in without downloading anything.
+
+**Only paste console commands you trust.** "Paste this into the console" is a
+classic way to steal accounts. This one reads the Costco sign-in on the page,
+talks to `signin.costco.com` and nothing else, and copies the result to your
+clipboard. You can watch its single request in the DevTools Network tab. Once
+`costco-cli` has imported the sign-in, copy something else to clear it from the
+clipboard.
+
+Other ways in:
+
+- **`./costco-cli -browser-login`** starts Chrome, Edge, Chromium or Brave with
+  a fresh temporary profile, opens Costco's order history there (which sends you
+  to the sign-in page), and captures the token response over the DevTools
+  protocol when you land back. The window then closes and the profile is
+  deleted. Passwords and passkeys saved only in your usual browser profile are
+  not available in the temporary one; OS-level passkeys (iCloud Keychain,
+  Windows Hello), security keys and phone sign-in work.
+- **`./costco-cli -cmd import-token < token.json`** imports a saved block, or
+  the raw JSON response of the `oauth2/v2.0/token` request copied from the
+  DevTools Network tab.
+- **Unattended runs** (cron and the like) should pass `-non-interactive`. They
+  then fail with instructions instead of waiting for someone to sign in.
+
+Run `./costco-cli -cmd info` at any time to see where config and tokens live and
+whether they are still valid.
+
+### Where your data goes
+
+Nowhere but your own machine and Costco. The only hosts contacted are
+`signin.costco.com` (token refresh) and `ecom-api.costco.com` (the GraphQL API),
+plus whatever costco.com loads in a `-browser-login` window; there is no
+telemetry or third-party reporting. The tool never sees your password, passkey
+or security key, only OAuth tokens Costco issued. Tokens are stored in
+`~/.costco/tokens.json` and downloaded history is written with user-only
+permissions (`0600` files, `0700` directories), because receipts contain your
+membership number, warehouse addresses and payment descriptions.
+
+The `-browser-login` window is started with
+`--disable-blink-features=AutomationControlled`. Chrome otherwise marks any
+window with a DevTools connection as automated (`navigator.webdriver`), and
+sign-in pages may refuse such windows even though a person is signing in.
+
+## Library usage
 
 ```go
 package main
 
 import (
-    "context"
-    "fmt"
-    "log"
-    "time"
+	"context"
+	"io"
+	"log"
+	"os"
+	"time"
 
-    "github.com/costco-go/pkg/costco"
+	"github.com/eshaffer321/costco-go/pkg/costco"
 )
 
 func main() {
-    config := costco.Config{
-        Email:              "your-email@example.com",
-        Password:           "your-password",
-        WarehouseNumber:    "847", // Your local warehouse number
-        TokenRefreshBuffer: 5 * time.Minute,
-    }
+	ctx := context.Background()
 
-    client := costco.NewClient(config)
-    ctx := context.Background()
+	// Only needed when no usable tokens are saved yet. Pipe in what the console
+	// command (costco.ConsoleSnippet()) printed; costco.LoginWithBrowser returns
+	// the same TokenResponse by opening a sign-in window instead.
+	if tokens, _ := costco.LoadTokens(); tokens == nil || time.Now().After(tokens.RefreshTokenExpiresAt) {
+		signInBlock, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			log.Fatal(err)
+		}
+		response, err := costco.ParseSignIn(string(signInBlock))
+		if err != nil {
+			log.Fatal(err)
+		}
+		saved, err := costco.ImportTokenResponse(response)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := costco.SaveTokens(saved); err != nil {
+			log.Fatal(err)
+		}
+	}
 
-    // Get online orders
-    orders, err := client.GetOnlineOrders(ctx, "2025-01-01", "2025-01-31", 1, 10)
-    if err != nil {
-        log.Fatal(err)
-    }
+	client := costco.NewClient(costco.Config{
+		WarehouseNumber:    "847",
+		TokenRefreshBuffer: 5 * time.Minute,
+	})
 
-    for _, order := range orders.BCOrders {
-        fmt.Printf("Order %s: $%.2f\n", order.OrderNumber, order.OrderTotal)
-    }
+	store, err := costco.NewFileStore("costco-history")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    // Get receipts
-    receipts, err := client.GetReceipts(ctx, "1/01/2025", "1/31/2025", "all", "all")
-    if err != nil {
-        log.Fatal(err)
-    }
+	history, err := client.DownloadHistory(ctx, costco.HistoryOptions{
+		Since:    time.Now().AddDate(-10, 0, 0),
+		Store:    store,
+		Progress: func(message string) { log.Println(message) },
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    for _, receipt := range receipts.Receipts {
-        fmt.Printf("Receipt from %s: $%.2f\n", receipt.TransactionDateTime, receipt.Total)
-    }
+	if err := store.WriteHistory(history); err != nil {
+		log.Fatal(err)
+	}
 
-    // Get detailed receipt
-    receipt, err := client.GetReceiptDetail(ctx, "21134300501862509051323", "warehouse")
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    fmt.Printf("Receipt total: $%.2f with %d items\n", receipt.Total, receipt.TotalItemCount)
+	log.Printf("%d orders, %d receipts, $%.2f in warehouse spending",
+		len(history.Orders), len(history.Receipts), history.WarehouseReceiptTotal())
 }
 ```
 
-## Logging
+`HistoryOptions` controls the download:
 
-The client supports optional logger injection using Go's standard `log/slog` package. By default, if no logger is provided, all logs are silently discarded.
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `Since` / `Until` | — / now | Inclusive date range |
+| `WindowDays` | `365` | Maximum days per API call |
+| `PageSize` | `50` | Online orders per page |
+| `SkipReceiptDetails` | `false` | Keep receipt summaries, skip line items |
+| `Store` | `nil` | Persist records as they arrive; enables resuming |
+| `Force` | `false` | Ignore records already in `Store` |
+| `RequestDelay` | `0` | Pause between API calls |
+| `MaxRetries` | `2` | Extra attempts per failed call |
+| `Progress` | `nil` | Receives human-readable status lines |
 
-### Basic Usage (Silent Mode)
+Anything the downloader could not retrieve lands in `History.Warnings` rather
+than aborting the run. The exception is `ErrNotAuthenticated`: when Costco stops
+accepting the sign-in, the download stops with that error. Sign in again and
+call `DownloadHistory` with the same `Store`; it skips what is already saved.
 
-```go
-// Logs are silently discarded (default behavior)
-config := costco.Config{
-    Email:           "your-email@example.com",
-    Password:        "your-password",
-    WarehouseNumber: "847",
-}
-client := costco.NewClient(config)
-```
+The lower-level calls remain available if you want a single slice of data
+instead of a full archive: `GetOnlineOrders`, `FetchAllOnlineOrders`,
+`GetReceipts` and `GetReceiptDetail`.
 
-### With Custom Logger
+### Logging
 
-```go
-import (
-    "log/slog"
-    "os"
-
-    "github.com/costco-go/pkg/costco"
-)
-
-// Create a text logger that outputs to stdout
-logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-    Level: slog.LevelInfo,
-}))
-
-config := costco.Config{
-    Email:           "your-email@example.com",
-    Password:        "your-password",
-    WarehouseNumber: "847",
-    Logger:          logger,
-}
-
-client := costco.NewClient(config)
-```
-
-### JSON Logging
-
-For structured JSON logs, use `slog.NewJSONHandler`:
+The client takes an optional `*slog.Logger`. With no logger, everything is
+discarded silently.
 
 ```go
 logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-    Level: slog.LevelDebug, // Include debug logs
+	Level: slog.LevelDebug,
 }))
 
-config := costco.Config{
-    Email:           "your-email@example.com",
-    Password:        "your-password",
-    WarehouseNumber: "847",
-    Logger:          logger,
+client := costco.NewClient(costco.Config{
+	WarehouseNumber: "847",
+	Logger:          logger,
+})
+```
+
+Tokens and credentials are never logged, at any level.
+
+## Working with downloaded receipts
+
+Costco returns discounts as separate line items rather than adjusting the item
+they apply to. A discount item has a negative amount, a negative unit count, and
+a description starting with `/` followed by the parent item number or
+description (for example `/1553261`).
+
+Returns also have negative amounts, but they carry a normal description and
+appear on receipts with `TransactionType: "Refund"`.
+
+```go
+// Identify a discount and the item it belongs to.
+for _, item := range receipt.ItemArray {
+	if item.IsDiscount() {
+		fmt.Printf("$%.2f off item %s\n", math.Abs(item.Amount), item.GetParentItemNumber())
+	}
 }
 
-client := costco.NewClient(config)
+// Or apply every discount to its parent in one call.
+netted, orphaned := costco.NetDiscounts(receipt.ItemArray)
 ```
 
-### Log Levels
+`NetDiscounts` matches a discount to its parent by item number, then by exact
+description, then by substring, and finally by word overlap — which handles
+coupons that reference a product generically (`/AAA BATTERY` against
+`DURACELL AAA`). Discounts it cannot place are returned as `orphaned`.
 
-The client uses the following log levels:
+The discount amount is already included in the receipt's `SubTotal`, so do not
+subtract it a second time.
 
-- `Info`: High-level operations (fetching orders, receipts, authentication success)
-- `Debug`: Detailed debugging information (API requests, token refresh)
-- `Warn`: Non-critical issues (token expiring soon, fallback behavior)
-- `Error`: Error conditions (authentication failures, API errors)
-
-### Structured Logging
-
-All logs use structured key-value pairs for easy parsing and filtering:
-
-```json
-{
-  "time": "2025-01-15T10:30:00Z",
-  "level": "INFO",
-  "msg": "fetching online orders",
-  "client": "costco",
-  "start_date": "2025-01-01",
-  "end_date": "2025-01-31",
-  "page_number": 1,
-  "page_size": 10
-}
-```
-
-Every log message includes a `client=costco` attribute for easy identification in multi-client applications.
-
-## CLI Usage
-
-### Build the CLI
-
-```bash
-go build -o costco-cli ./cmd/costco-cli
-```
-
-### Authentication Setup
-
-Authentication requires a valid token from Costco's OAuth2 endpoint. Tokens are stored in `~/.costco/tokens.json` and automatically refreshed (refresh tokens are valid for ~90 days).
-
-**Step 1 — Store your email and warehouse number:**
-
-```bash
-./costco-cli -cmd setup
-```
-
-**Step 2 — Import a token from your browser:**
-
-```bash
-./costco-cli -cmd import-token
-```
-
-Then paste the JSON response body when prompted. To get it:
-
-1. Log in to [costco.com](https://www.costco.com) in your browser
-2. Open DevTools → Network tab → filter by **Fetch/XHR**
-3. Search for **"token"** and select the request to the token endpoint
-4. Click the **Response** tab and copy the full JSON body
-5. Paste it into the terminal and press **Ctrl+D**
-
-The command will confirm the token was saved and show the expiry times:
-
-```
-✓ Tokens saved to ~/.costco/tokens.json
-  ID token valid until:      2026-04-23 14:53:00 MDT
-  Refresh token valid until: 2026-07-22 14:38:00 MDT
-```
-
-Once tokens are saved, all CLI commands work without any further authentication steps. When the refresh token expires (~90 days), repeat Step 2.
-
-### Get online orders
-
-```bash
-# Get orders from last 3 months (default)
-./costco-cli -cmd orders
-
-# Get orders for specific date range
-./costco-cli -cmd orders -start 2025-01-01 -end 2025-01-31
-
-# Get orders with pagination
-./costco-cli -cmd orders -page 2 -size 20
-
-# Output as JSON
-./costco-cli -cmd orders -json
-```
-
-### Get receipts
-
-```bash
-# Get all receipts from last 3 months
-./costco-cli -cmd receipts
-
-# Get receipts for specific date range
-./costco-cli -cmd receipts -start 2025-01-01 -end 2025-01-31
-
-# Output as JSON
-./costco-cli -cmd receipts -json
-```
-
-### Get receipt details
-
-```bash
-# Get detailed receipt with all line items
-./costco-cli -cmd receipt-detail -barcode 21134300501862509051323
-
-# Output as JSON
-./costco-cli -cmd receipt-detail -barcode 21134300501862509051323 -json
-```
-
-### CLI Flags
-
-- `-cmd`: Command to run: `setup`, `import-token`, `info`, `orders`, `receipts`, `receipt-detail`
-- `-start`: Start date in YYYY-MM-DD format
-- `-end`: End date in YYYY-MM-DD format
-- `-barcode`: Receipt barcode (required for `receipt-detail`)
-- `-page`: Page number for orders (default: 1)
-- `-size`: Page size for orders (default: 10)
-- `-json`: Output results as JSON
-
-## Running Tests
-
-```bash
-go test ./pkg/costco -v
-```
-
-## API Details
-
-The client uses Costco's OAuth2 authentication flow and GraphQL API:
+## API details
 
 - **Auth endpoint**: `https://signin.costco.com/.../oauth2/v2.0/token`
 - **GraphQL endpoint**: `https://ecom-api.costco.com/ebusiness/order/v1/orders/graphql`
 - **Auth header**: `costco-x-authorization: Bearer {id_token}`
 
-The client handles:
-- Automatic token refresh before expiry (tokens stored in `~/.costco/tokens.json`)
-- Thread-safe token management
-- GraphQL query construction and response parsing
+The client refreshes tokens before they expire, manages them in a thread-safe
+way, and persists them to `~/.costco/tokens.json`.
 
-Bootstrap tokens using `costco-cli -cmd import-token` — see [Authentication Setup](#authentication-setup) above.
+## Running tests
 
-## Data Structures
-
-### Online Orders
-- Order header information (date, total, status)
-- Line items with shipping details
-- Shipment tracking information
-
-### Receipts
-- Transaction details (date, warehouse, total)
-- Complete line item details with prices
-- Tax breakdown
-- Payment information
-- Membership number
-
-## Handling Discount Line Items
-
-Costco's API returns discounts as separate line items in receipts. These discount items have special characteristics that allow you to identify and process them differently from regular items.
-
-### Discount Item Characteristics
-
-Discount line items have:
-- **Negative amount** (e.g., `-4.00`)
-- **Negative unit** (e.g., `-1`)
-- **Description starting with "/"** followed by the parent item number (e.g., `"/1553261"`)
-
-**Important:** The discount amount is already factored into the receipt's `SubTotal`. You should not double-count discounts when calculating totals.
-
-### Distinguishing Discounts from Returns
-
-Return items also have negative amounts, but they differ from discounts:
-- Returns have **normal descriptions** (e.g., "RED GRAPE")
-- Returns appear in receipts with **`TransactionType: "Refund"`**
-- Returns do **NOT** have the "/" prefix in their description
-
-### Helper Methods
-
-The library provides two helper methods to identify and process discount items:
-
-#### IsDiscount()
-
-Returns `true` if a line item is a discount:
-
-```go
-for _, item := range receipt.ItemArray {
-    if item.IsDiscount() {
-        fmt.Printf("Found discount: $%.2f\n", math.Abs(item.Amount))
-        continue
-    }
-    // Process regular items...
-}
+```bash
+go test ./... -v
 ```
 
-#### GetParentItemNumber()
+The browser tests launch a real Chrome/Edge and skip themselves when none is
+installed; `go test -short ./...` skips them explicitly.
 
-Returns the item number that the discount applies to:
+## Running in a container
 
-```go
-for _, item := range receipt.ItemArray {
-    if item.IsDiscount() {
-        parentItemNum := item.GetParentItemNumber()
-        fmt.Printf("Discount of $%.2f applies to item %s\n",
-            math.Abs(item.Amount),
-            parentItemNum)
-    }
-}
+The token file is all a download needs, so a container can run with just that
+file mounted. Sign in on your own machine first (see
+[Signing in](#signing-in)); nobody can answer a sign-in prompt inside the
+container, so it runs with `-non-interactive` and stops with instructions when
+the token needs renewing.
+
+```bash
+# Once: build the image straight from GitHub (no clone needed).
+docker build -t costco-cli "https://github.com/ssjfrank/costco-go.git#cursor/download-full-order-history-9b26"
+
+# Each download: mount the token file and an output directory.
+mkdir -p "$HOME/costco"
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,source="$HOME/.costco/tokens.json",target=/secrets/tokens.json \
+  -v "$HOME/costco:/data" \
+  costco-cli
 ```
 
-### Example: Calculating Net Item Amounts
+The history lands in `~/costco/costco-history`. Extra flags go at the end, for
+example `costco-cli -since 2026-01-01`.
 
-Here's how to build a map of items with discounts applied:
+- **Where the token file lives.** Signing in writes `~/.costco/tokens.json`.
+  To keep it somewhere else, set `COSTCO_TOKEN_FILE` when signing in, and
+  mount that path instead:
+  `COSTCO_TOKEN_FILE="$HOME/costco/tokens.json" ./costco-cli -cmd login`.
+  Inside the image, `COSTCO_TOKEN_FILE` is `/secrets/tokens.json`.
+- **Mount the file read-write.** Every token refresh writes a new refresh
+  token back to the file, in place, which a single-file mount allows. A
+  `readonly` mount still works, but the refreshed token is lost when the
+  container exits. The saved refresh token then ages until it expires.
+- **Use `--mount`, not `-v`, for the token file.** If the file does not exist
+  yet, `-v` silently creates a directory with that name on your machine, and
+  that directory breaks later sign-ins until you delete it. `--mount` refuses
+  to start instead. The program recognises the directory and says so.
+- **`--user "$(id -u):$(id -g)"`** lets the container read the owner-only
+  token file on Linux and makes the downloaded files yours. On Docker Desktop
+  for Mac it does no harm.
+- The image is built from `gcr.io/distroless/static-debian12:nonroot`: the
+  static binary, CA certificates, and nothing else (about 16 MB). The build
+  context excludes `costco-history/`, `token.json` and `.costco/`, so personal
+  data never ends up in an image.
 
-```go
-// Build net amounts map
-itemAmounts := make(map[string]float64)
-itemDescs := make(map[string]string)
+## Publishing binaries
 
-for _, item := range receipt.ItemArray {
-    if item.IsDiscount() {
-        // Apply discount to parent item
-        parentNum := item.GetParentItemNumber()
-        itemAmounts[parentNum] += item.Amount
-    } else {
-        // Add regular item
-        itemAmounts[item.ItemNumber] += item.Amount
-        itemDescs[item.ItemNumber] = item.ItemDescription01
-    }
-}
+Pushing a version tag publishes a release. `.github/workflows/release.yml` runs
+the tests, builds macOS (Apple Silicon and Intel), Linux and Windows binaries
+with `scripts/build-release.sh`, and attaches them to a GitHub Release along
+with `SHA256SUMS`. Tags with a suffix, such as `v1.0.0-rc.1`, become
+pre-releases.
 
-// Now process items with net amounts
-for itemNum, netAmount := range itemAmounts {
-    fmt.Printf("%s: $%.2f\n", itemDescs[itemNum], netAmount)
-}
+```bash
+git tag v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
 ```
 
-### Real-World Example
-
-Given this receipt data:
-
-```json
-{
-  "itemArray": [
-    {
-      "itemNumber": "1553261",
-      "itemDescription01": "GUAC BOWL",
-      "amount": 13.99,
-      "unit": 1
-    },
-    {
-      "itemNumber": "363064",
-      "itemDescription01": "/1553261",
-      "amount": -4.00,
-      "unit": -1
-    }
-  ],
-  "subTotal": 9.99,
-  "instantSavings": 4.00
-}
-```
-
-Processing with helpers:
-
-```go
-// Item 1: Regular item
-item1.IsDiscount() // Returns: false
-
-// Item 2: Discount item
-item2.IsDiscount()           // Returns: true
-item2.GetParentItemNumber()  // Returns: "1553261"
-
-// Net amount: 13.99 + (-4.00) = 9.99 (matches subTotal)
-```
-
-### Use Cases
-
-**Budgeting Applications:** Calculate net amounts per item to accurately categorize spending.
-
-**Price Tracking:** Track both original and discounted prices to analyze savings over time.
-
-**Receipt Processing:** Filter out discount line items to avoid confusion when presenting items to users.
-
-**Analytics:** Aggregate `instantSavings` data across receipts to measure total savings.
+The binaries are cross-compiled with CGO disabled. Go's linker ad-hoc signs
+darwin/arm64 binaries itself, which Apple Silicon requires before it will run
+them, so no Mac is needed to build. On a fork, enable GitHub Actions (the
+**Actions** tab) before pushing the tag; a tag pushed while Actions is off
+publishes nothing.
 
 ## License
 

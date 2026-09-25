@@ -1,0 +1,40 @@
+name: Release
+
+# Pushing a tag such as v1.0.0 builds costco-cli for macOS (Apple Silicon and
+# Intel), Linux and Windows and publishes the binaries as a GitHub Release.
+# Tags with a suffix (v1.0.0-rc.1) are published as pre-releases.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test -short ./...
+
+      - name: Build
+        run: scripts/build-release.sh dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--title "costco-cli ${GITHUB_REF_NAME}" --generate-notes --verify-tag)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}"

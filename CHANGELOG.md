@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-09-23
+
+The library and CLI are now focused on one job: downloading a complete Costco
+purchase history to local JSON files. Signing in is the only manual step left.
+
+### Added
+- **Sign in with one console command**: Sign in to costco.com in your own browser, open Orders & Returns, and paste the command from `costco-cli -cmd snippet` into the DevTools console. It finds the sign-in Costco's order history app (MSAL.js) keeps in the page's storage and asks `signin.costco.com` for fresh tokens the way the app does. It then copies them to the clipboard as a block of short lines. `costco-cli` picks the block up from the clipboard by itself (`pbpaste`, PowerShell `Get-Clipboard`, `wl-paste`, `xclip`, `xsel`), or you can paste it. Short lines matter because macOS terminals cut a pasted line off at 1024 characters. This replaces the manual DevTools Network-tab copy. When Costco rejects the saved sign-in partway through a download, the steps are shown again and the download resumes afterwards.
+- **`ConsoleSnippet()`** and **`ParseSignIn(text)`**: The library side of the above. `ParseSignIn` reads the block (tolerating console prefixes, indentation and CRLF) or a raw token response, and returns the `TokenResponse` that `ImportTokenResponse` accepts.
+- **Optional sign-in through a window the tool opens** (`-browser-login`): Starts Chrome, Edge, Chromium or Brave with a throwaway profile on Costco's order history, which redirects to the sign-in page, and captures the OAuth token response the site receives over the DevTools protocol. Library: **`LoginWithBrowser(ctx, BrowserLoginOptions)`** and **`SignInStartURL`**.
+- **`ErrNotAuthenticated`**: Wrapped by every error that only signing in again can fix (no tokens saved, a refused refresh token, a 401/403 from the API), so callers can tell it apart from an outage.
+- **Prebuilt binaries**: Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds macOS (Apple Silicon and Intel), Linux and Windows binaries with `scripts/build-release.sh` and publishes them with `SHA256SUMS` as a GitHub Release (suffixed tags become pre-releases). On a Mac, one `curl` command downloads the right build; no Go toolchain is needed. The darwin/arm64 binary carries the ad-hoc signature Go's linker generates, which Apple Silicon requires.
+- **`costco-cli -version`**: Prints the version and the commit a release build came from.
+- **Container image** (`Dockerfile`): Runs a download with only the token file mounted. It is a distroless static image of about 16 MB that runs as non-root with `-non-interactive`, reads the token file from `/secrets/tokens.json`, and writes to `/data/costco-history`. Build it straight from the Git URL; `.dockerignore` keeps `costco-history/`, `token.json` and `.costco/` out of the build context.
+- **`COSTCO_TOKEN_FILE`** (`TokenFileEnv`, `TokenFilePath()`): Points loading and saving at any token file instead of `~/.costco/tokens.json`, without touching `~/.costco` at all. Tokens are rewritten in place, which a single-file bind mount requires; a test holds that. If Docker has created a directory where the file should be (`-v` with a missing source does that), the error explains what happened. Sign-in and not-signed-in messages name the token file.
+- **`costco-cli -cmd login`**, **`-cmd snippet`**, **`-browser`** and **`-non-interactive`**: Sign in without downloading; print the console command; choose the browser for `-browser-login`; never ask for a sign-in (for unattended runs, which then fail with instructions instead).
+- **`Client.DownloadHistory(ctx, HistoryOptions)`**: Downloads every online order and warehouse receipt in a date range. The range is walked newest-first in windows small enough for Costco's API to accept, online orders are paged until exhausted, and each receipt is expanded into its full line-item detail. A failure in the newest window aborts the run (that almost always means expired tokens); later failures are collected in `History.Warnings` so one unavailable record cannot discard years of downloaded data.
+- **`Client.FetchAllOnlineOrders(ctx, startDate, endDate, pageSize)`**: Pages through every online order in a date range.
+- **`FileStore`**: Writes history to a directory as `orders/<order number>.json`, `receipts/<barcode>.json`, combined `orders.json` / `receipts.json`, and a `manifest.json` index. Records are written as they arrive, so an interrupted download resumes instead of starting over. Files and directories are created user-only (0600/0700) because receipts contain membership numbers and payment descriptions.
+- **`SplitDateRange(since, until, windowDays)`**: Splits a date range into contiguous, non-overlapping windows, newest first.
+- **`History`, `HistoryOptions`, `HistoryStore`, `Manifest`, `DateWindow`**: Supporting types for the download flow.
+- **`ErrNoOrderData`**: Sentinel error letting callers distinguish "this window has no orders" from a real failure.
+- **`costco-cli` download command** (now the default): `costco-cli` with no arguments downloads everything into `./costco-history`. Flags: `-out`, `-since`, `-until`, `-window`, `-page-size`, `-delay`, `-retries`, `-no-items`, `-force`, `-quiet`. Exits non-zero when any record could not be downloaded.
+
+### Changed
+- **BREAKING — CLI commands**: `-cmd orders`, `-cmd receipts` and `-cmd receipt-detail` are gone. The downloaded JSON contains the same data, and `-cmd` now defaults to `download`. `setup`, `import-token` and `info` are unchanged.
+- **`GetReceipts` date handling**: Dates given as `YYYY-MM-DD` are converted to the `M/DD/YYYY` format Costco's receipt API requires, so both formats now work. Previously an ISO date was forwarded unchanged and silently returned nothing.
+- **`CostcoClient` interface**: Now describes the download methods alongside the three API primitives.
+- **Sign-in failures stop a download**: `DownloadHistory` treats `ErrNotAuthenticated` like cancellation — it is never retried and never recorded as a warning, because every later request would fail the same way.
+- **`costco-cli -cmd setup` is optional**: The warehouse number defaults to `847` and the email is only used for logging.
+- **`costco-cli -cmd import-token`** accepts the console command's block as well as a raw token response, so `import-token < token.json` works with either.
+
+### Security
+- The tool never sees your password, passkey or security key, only OAuth tokens Costco issued. The console command's only network request goes to `signin.costco.com`, the same refresh the order history app makes, and it copies nothing when Costco refuses the sign-in. The docs warn that pasting untrusted console commands is a common account-theft trick.
+- The `-browser-login` window uses a fresh, temporary browser profile that is deleted as soon as the tokens are captured, so no Costco session cookies are left behind. It accepts a token response only from the token endpoint on `signin.costco.com`.
+- The `-browser-login` window is started with `--disable-blink-features=AutomationControlled`. Chrome otherwise sets `navigator.webdriver` for any window that has a DevTools connection, and sign-in pages may refuse such windows even though a person is the one signing in.
+- New dependency: `github.com/coder/websocket` (ISC licence, no dependencies of its own), used only to talk to the local browser over its DevTools socket on `127.0.0.1`.
+
+### Removed
+- **BREAKING — spending analytics helpers**: `GetAllTransactionItems`, `GetItemHistory`, `GetSpendingSummary` and `GetFrequentItems`, along with the `TransactionWithItems`, `ItemPurchase`, `SpendingByDepartment` and `FrequentItem` types. Each re-downloaded the whole history to compute one aggregate; the same analysis now runs offline over the downloaded JSON.
+
+### Fixed
+- **CI**: The workflows pinned Go 1.21/1.22 while `go.mod` requires 1.24, so every job would have failed; they now read the version from `go.mod`. The build job also listed macOS and Windows in its matrix but always ran on Ubuntu; it now runs on each OS and checks the binary with `-version`.
+- **Client tests**: Several tests still built clients without tokens after password-grant authentication was removed in 0.3.11, so they failed before reaching their test server.
+
+[1.0.0]: https://github.com/eshaffer321/costco-go/compare/v0.3.11...v1.0.0
+
 ## [0.3.11] - 2026-06-20
 
 ### Fixed

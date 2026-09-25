@@ -16,6 +16,33 @@ const (
 	tokenFile  = "tokens.json"
 )
 
+// TokenFileEnv names the environment variable that points at the token file,
+// replacing the default ~/.costco/tokens.json. A container can mount just that
+// file and set the variable to the mount point.
+const TokenFileEnv = "COSTCO_TOKEN_FILE"
+
+// TokenFilePath returns where tokens are loaded from and saved to.
+func TokenFilePath() (string, error) {
+	if path := os.Getenv(TokenFileEnv); path != "" {
+		return path, nil
+	}
+	configPath, err := getConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configPath, tokenFile), nil
+}
+
+// rejectDirectoryTokenFile catches the directory Docker creates when asked to
+// bind-mount a token file that does not exist yet on the host.
+func rejectDirectoryTokenFile(path string) error {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a directory, not a token file. Docker creates one when told to mount a file "+
+			"that does not exist yet: delete it on the host, sign in there to create the file, then mount it again", path)
+	}
+	return nil
+}
+
 func getConfigPath() (string, error) {
 	// Allow overriding config path for testing
 	if testPath := os.Getenv("COSTCO_TEST_CONFIG_PATH"); testPath != "" {
@@ -117,12 +144,14 @@ func LoadConfig() (*StoredConfig, error) {
 //	}
 //	err := costco.SaveTokens(tokens)
 func SaveTokens(tokens *StoredTokens) error {
-	if err := ensureConfigDir(); err != nil {
+	filePath, err := TokenFilePath()
+	if err != nil {
 		return err
 	}
-
-	configPath, err := getConfigPath()
-	if err != nil {
+	if err := rejectDirectoryTokenFile(filePath); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0700); err != nil {
 		return err
 	}
 
@@ -133,7 +162,8 @@ func SaveTokens(tokens *StoredTokens) error {
 		return err
 	}
 
-	filePath := filepath.Join(configPath, tokenFile)
+	// Rewritten in place rather than via a temporary file and rename: a file
+	// bind-mounted on its own into a container cannot be replaced.
 	return os.WriteFile(filePath, data, 0600) // Only user can read/write
 }
 
@@ -152,12 +182,14 @@ func SaveTokens(tokens *StoredTokens) error {
 //	    fmt.Println("Valid token found")
 //	}
 func LoadTokens() (*StoredTokens, error) {
-	configPath, err := getConfigPath()
+	filePath, err := TokenFilePath()
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectDirectoryTokenFile(filePath); err != nil {
+		return nil, err
+	}
 
-	filePath := filepath.Join(configPath, tokenFile)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -185,12 +217,11 @@ func LoadTokens() (*StoredTokens, error) {
 //	    log.Printf("Failed to clear tokens: %v", err)
 //	}
 func ClearTokens() error {
-	configPath, err := getConfigPath()
+	filePath, err := TokenFilePath()
 	if err != nil {
 		return err
 	}
 
-	filePath := filepath.Join(configPath, tokenFile)
 	err = os.Remove(filePath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -229,7 +260,10 @@ func GetConfigInfo() string {
 	}
 
 	// Check if tokens exist
-	tokenFile := filepath.Join(configPath, tokenFile)
+	tokenFile, err := TokenFilePath()
+	if err != nil {
+		return info + fmt.Sprintf("Error getting token file path: %v\n", err)
+	}
 	if _, err := os.Stat(tokenFile); err == nil {
 		info += fmt.Sprintf("Token file: %s (exists)\n", tokenFile)
 

@@ -17,7 +17,7 @@ func setupCredentials() error {
 
 	fmt.Println("Costco CLI Setup")
 	fmt.Println("================")
-	fmt.Println("Your credentials will be stored in ~/.costco/")
+	fmt.Println("Your email and warehouse number will be stored in ~/.costco/")
 	fmt.Println()
 
 	// Get email
@@ -62,8 +62,8 @@ func setupCredentials() error {
 
 	fmt.Println("\n✓ Configuration saved to ~/.costco/config.json")
 	fmt.Println("\nSetup complete! Next, run:")
-	fmt.Println("  costco-cli -cmd import-token")
-	fmt.Println("\nThen log in to costco.com in your browser and paste the OAuth token response.")
+	fmt.Println("  costco-cli")
+	fmt.Println("\nIt shows you how to sign in, then the download starts.")
 
 	return nil
 }
