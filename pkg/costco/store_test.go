@@ -160,6 +160,86 @@ func TestFileStore_WriteHistoryProducesCombinedFilesAndManifest(t *testing.T) {
 	assert.Equal(t, filepath.Join("receipts", "BC1.json"), manifest.Receipts[0].File)
 }
 
+func TestFileStore_WriteHistoryIndexesTheWholeArchive(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	// A full download, then a later run narrowed with -since.
+	require.NoError(t, store.WriteHistory(&History{
+		Since: time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC),
+		Until: time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC),
+		Orders: []OnlineOrder{
+			{OrderNumber: "ORDER-2022", OrderPlacedDate: "2022-11-05", OrderTotal: 40.00},
+		},
+		Receipts: []Receipt{
+			{TransactionBarcode: "BC2023", TransactionDateTime: "2023-07-04T11:30:00", Total: 60.00, MembershipNumber: "1",
+				ItemArray: []ReceiptItem{{ItemNumber: "1", ItemDescription01: "MILK", Amount: 60.00, Unit: 1}}},
+			{TransactionBarcode: "BC2022", TransactionDateTime: "2022-12-25T09:15:00", Total: 70.00, MembershipNumber: "1",
+				ItemArray: []ReceiptItem{{ItemNumber: "2", ItemDescription01: "EGGS", Amount: 70.00, Unit: 1}}},
+		},
+	}))
+	require.NoError(t, store.WriteHistory(&History{
+		Since:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		Until:       time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC),
+		GeneratedAt: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
+		Orders: []OnlineOrder{
+			{OrderNumber: "ORDER-2024", OrderPlacedDate: "2024-06-15", OrderTotal: 100.00},
+		},
+		Receipts: []Receipt{
+			{TransactionBarcode: "BC2024", TransactionDateTime: "2024-01-20T10:00:00", Total: 50.00, MembershipNumber: "1",
+				ItemArray: []ReceiptItem{{ItemNumber: "3", ItemDescription01: "GUAC BOWL", Amount: 50.00, Unit: 1}}},
+		},
+	}))
+
+	var orders []OnlineOrder
+	readJSON(t, filepath.Join(store.Dir(), "orders.json"), &orders)
+	require.Len(t, orders, 2, "orders from the earlier run stay in the combined file")
+	assert.Equal(t, "ORDER-2024", orders[0].OrderNumber, "newest first")
+	assert.Equal(t, "ORDER-2022", orders[1].OrderNumber)
+
+	var receipts []Receipt
+	readJSON(t, filepath.Join(store.Dir(), "receipts.json"), &receipts)
+	require.Len(t, receipts, 3)
+	assert.Equal(t, "BC2024", receipts[0].TransactionBarcode)
+	assert.Equal(t, "BC2022", receipts[2].TransactionBarcode)
+
+	var manifest Manifest
+	readJSON(t, filepath.Join(store.Dir(), "manifest.json"), &manifest)
+	assert.Equal(t, 2, manifest.OrderCount)
+	assert.Equal(t, 3, manifest.ReceiptCount)
+	assert.Equal(t, 3, manifest.ItemCount)
+	assert.InDelta(t, 140.00, manifest.OnlineOrderTotal, 0.001)
+	assert.InDelta(t, 180.00, manifest.WarehouseReceiptTotal, 0.001)
+	assert.Equal(t, "2022-01-01", manifest.Since, "the range spans every run written here")
+	assert.Equal(t, "2024-12-31", manifest.Until)
+	assert.True(t, manifest.GeneratedAt.Equal(time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)))
+
+	require.Len(t, manifest.Receipts, 3)
+	assert.Equal(t, "BC2022", manifest.Receipts[2].ID)
+	assert.Equal(t, filepath.Join("receipts", "BC2022.json"), manifest.Receipts[2].File)
+	require.Len(t, manifest.Orders, 2)
+	assert.Equal(t, filepath.Join("orders", "ORDER-2022.json"), manifest.Orders[1].File)
+}
+
+func TestFileStore_WriteHistoryReportsFilesItCannotRead(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	// What an interrupted write leaves behind.
+	require.NoError(t, os.WriteFile(filepath.Join(store.Dir(), "receipts", "BROKEN.json"), []byte(`{"transactionBarcode": "BRO`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(store.Dir(), "receipts", "notes.txt"), []byte("mine"), 0600))
+
+	require.NoError(t, store.WriteHistory(&History{
+		Receipts: []Receipt{{TransactionBarcode: "BC1", TransactionDateTime: "2024-04-05T10:00:00", Total: 75.50}},
+	}))
+
+	var manifest Manifest
+	readJSON(t, filepath.Join(store.Dir(), "manifest.json"), &manifest)
+	assert.Equal(t, 1, manifest.ReceiptCount)
+	require.Len(t, manifest.Warnings, 1, "a damaged file is reported, other people's files are ignored")
+	assert.Contains(t, manifest.Warnings[0], "BROKEN.json")
+}
+
 func readJSON(t *testing.T, path string, target interface{}) {
 	t.Helper()
 	data, err := os.ReadFile(path)
