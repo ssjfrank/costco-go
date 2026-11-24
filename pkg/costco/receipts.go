@@ -38,6 +38,21 @@ type Receipt struct {
 	MembershipNumber    string        `json:"membershipNumber"`
 }
 
+// hasDetail reports whether the receipt came from the per-receipt detail lookup
+// rather than the receipt list. ReceiptsQuery asks for none of the fields
+// checked here, so a list summary can never carry them.
+func (r *Receipt) hasDetail() bool {
+	if r.TransactionDate != "" || r.MembershipNumber != "" || r.WarehouseNumber != 0 || r.TransactionNumber != 0 {
+		return true
+	}
+	for i := range r.ItemArray {
+		if r.ItemArray[i].ItemDescription01 != "" || r.ItemArray[i].Amount != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ReceiptItem represents a single line item on a receipt
 type ReceiptItem struct {
 	ItemNumber             string  `json:"itemNumber"`

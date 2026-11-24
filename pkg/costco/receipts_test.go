@@ -405,3 +405,31 @@ func TestNetDiscounts(t *testing.T) {
 		}
 	})
 }
+
+func TestReceipt_HasDetail(t *testing.T) {
+	// What the receipt list returns: enough to identify the receipt, and item
+	// numbers without descriptions or prices.
+	summary := Receipt{
+		TransactionBarcode:  "21134300501862509051323",
+		TransactionDateTime: "2025-09-05T13:23:00",
+		WarehouseName:       "MERIDIAN",
+		ReceiptType:         "In-Warehouse",
+		DocumentType:        "WarehouseReceiptDetail",
+		Total:               269.13,
+		TotalItemCount:      2,
+		ItemArray:           []ReceiptItem{{ItemNumber: "1553261"}, {ItemNumber: "363064"}},
+		TenderArray:         []Tender{{TenderTypeCode: "061", TenderDescription: "VISA", AmountTender: 269.13}},
+	}
+	assert.False(t, summary.hasDetail())
+
+	detailed := summary
+	detailed.ItemArray = []ReceiptItem{{ItemNumber: "1553261", ItemDescription01: "GUAC BOWL", Unit: 1, Amount: 13.99}}
+	assert.True(t, detailed.hasDetail(), "line items with descriptions only come from the detail lookup")
+
+	fuel := summary
+	fuel.ItemArray = nil
+	fuel.MembershipNumber = "111222333"
+	assert.True(t, fuel.hasDetail(), "a detailed receipt is recognised even without line items")
+
+	assert.False(t, (&Receipt{}).hasDetail())
+}

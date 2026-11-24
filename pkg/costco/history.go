@@ -80,8 +80,8 @@ func normalizeReceiptDate(value string) string {
 }
 
 // HistoryStore persists records as they are downloaded. Supplying a store makes a
-// download resumable: receipts already present are read back from storage instead
-// of being fetched again.
+// download resumable: receipts already present with their line items are read
+// back from storage instead of being fetched again.
 type HistoryStore interface {
 	SaveOrder(order *OnlineOrder) error
 	SaveReceipt(receipt *Receipt) error
@@ -109,7 +109,8 @@ type HistoryOptions struct {
 	// interrupted download to resume where it left off.
 	Store HistoryStore
 
-	// Force re-fetches receipts that are already present in Store.
+	// Force re-fetches receipts that are already present in Store. A receipt
+	// whose re-fetch fails keeps the line items already stored.
 	Force bool
 
 	// RequestDelay is paused between API calls to stay friendly to Costco's API.
@@ -339,12 +340,14 @@ func (c *Client) collectReceipts(ctx context.Context, history *History, receipts
 		}
 		seen[barcode] = true
 
-		if opts.Store != nil && !opts.Force && opts.Store.HasReceipt(barcode) {
-			if stored, err := opts.Store.LoadReceipt(barcode); err == nil {
-				history.Receipts = append(history.Receipts, *stored)
-				added++
-				continue
-			}
+		// A receipt saved without its line items, because the lookup failed or
+		// an earlier run skipped it, only counts as downloaded when this run
+		// skips line items too.
+		stored := loadStoredReceipt(opts.Store, barcode)
+		if stored != nil && !opts.Force && (opts.SkipReceiptDetails || stored.hasDetail()) {
+			history.Receipts = append(history.Receipts, *stored)
+			added++
+			continue
 		}
 
 		receipt := summary
@@ -360,6 +363,13 @@ func (c *Client) collectReceipts(ctx context.Context, history *History, receipts
 			}
 		}
 
+		// A summary never replaces line items that are already on disk.
+		if !receipt.hasDetail() && stored != nil && stored.hasDetail() {
+			history.Receipts = append(history.Receipts, *stored)
+			added++
+			continue
+		}
+
 		if opts.Store != nil {
 			if err := opts.Store.SaveReceipt(&receipt); err != nil {
 				history.warn(fmt.Sprintf("saving receipt %s: %v", barcode, err))
@@ -369,6 +379,19 @@ func (c *Client) collectReceipts(ctx context.Context, history *History, receipts
 		added++
 	}
 	return added, nil
+}
+
+// loadStoredReceipt returns the receipt saved for barcode, or nil when there is
+// no store, no saved copy, or the copy cannot be read.
+func loadStoredReceipt(store HistoryStore, barcode string) *Receipt {
+	if store == nil || !store.HasReceipt(barcode) {
+		return nil
+	}
+	stored, err := store.LoadReceipt(barcode)
+	if err != nil {
+		return nil
+	}
+	return stored
 }
 
 func (c *Client) downloadOrderWindow(ctx context.Context, window DateWindow, opts HistoryOptions) ([]OnlineOrder, error) {
