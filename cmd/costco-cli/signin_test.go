@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -99,4 +101,133 @@ func TestWithSignInRetry_ReportsSignInFailure(t *testing.T) {
 		func(context.Context) error { return notSignedIn() })
 
 	assert.ErrorIs(t, err, closed)
+}
+
+// fakeSignIn stands in for the three ways of getting a sign-in and records
+// which of them were used.
+type fakeSignIn struct {
+	inClipboard  *costco.TokenResponse
+	windowUsable bool
+	windowErr    error
+	used         []string
+}
+
+func (f *fakeSignIn) ways() signInWays {
+	return signInWays{
+		clipboard: func(context.Context) *costco.TokenResponse {
+			f.used = append(f.used, "clipboard")
+			return f.inClipboard
+		},
+		windowUsable: func() bool { return f.windowUsable },
+		window: func(context.Context) (*costco.TokenResponse, error) {
+			f.used = append(f.used, "window")
+			if f.windowErr != nil {
+				return nil, f.windowErr
+			}
+			return &costco.TokenResponse{RefreshToken: "from-window"}, nil
+		},
+		console: func(context.Context) (*costco.TokenResponse, error) {
+			f.used = append(f.used, "console")
+			return &costco.TokenResponse{RefreshToken: "from-console"}, nil
+		},
+	}
+}
+
+func TestObtainSignIn_OpensAWindowByDefault(t *testing.T) {
+	fake := &fakeSignIn{windowUsable: true}
+
+	tokens, err := obtainSignIn(context.Background(), signInConfig{}, fake.ways(), io.Discard)
+
+	require.NoError(t, err)
+	assert.Equal(t, "from-window", tokens.RefreshToken)
+	assert.Equal(t, []string{"clipboard", "window"}, fake.used, "nobody is asked to open a console")
+}
+
+func TestObtainSignIn_PrefersASignInAlreadyCopied(t *testing.T) {
+	fake := &fakeSignIn{windowUsable: true, inClipboard: &costco.TokenResponse{RefreshToken: "from-clipboard"}}
+
+	tokens, err := obtainSignIn(context.Background(), signInConfig{}, fake.ways(), io.Discard)
+
+	require.NoError(t, err)
+	assert.Equal(t, "from-clipboard", tokens.RefreshToken)
+	assert.Equal(t, []string{"clipboard"}, fake.used, "running the console command first still works without a window")
+}
+
+func TestObtainSignIn_FallsBackToTheConsoleWhenTheWindowFails(t *testing.T) {
+	fake := &fakeSignIn{windowUsable: true, windowErr: errors.New("the browser window was closed before sign-in finished")}
+	var out bytes.Buffer
+
+	tokens, err := obtainSignIn(context.Background(), signInConfig{}, fake.ways(), &out)
+
+	require.NoError(t, err)
+	assert.Equal(t, "from-console", tokens.RefreshToken)
+	assert.Equal(t, []string{"clipboard", "window", "console"}, fake.used)
+	assert.Contains(t, out.String(), "window was closed", "the user is told why the window did not work")
+}
+
+func TestObtainSignIn_UsesTheConsoleWhereNoWindowCanOpen(t *testing.T) {
+	fake := &fakeSignIn{windowUsable: false}
+
+	tokens, err := obtainSignIn(context.Background(), signInConfig{}, fake.ways(), io.Discard)
+
+	require.NoError(t, err)
+	assert.Equal(t, "from-console", tokens.RefreshToken)
+	assert.Equal(t, []string{"clipboard", "console"}, fake.used)
+}
+
+func TestObtainSignIn_CancellingTheWindowDoesNotStartTheConsole(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fake := &fakeSignIn{windowUsable: true, windowErr: context.Canceled}
+
+	_, err := obtainSignIn(ctx, signInConfig{}, fake.ways(), io.Discard)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotContains(t, fake.used, "console")
+}
+
+func TestObtainSignIn_BrowserLoginUsesOnlyTheWindow(t *testing.T) {
+	closed := errors.New("the browser window was closed before sign-in finished")
+	fake := &fakeSignIn{windowErr: closed, inClipboard: &costco.TokenResponse{RefreshToken: "from-clipboard"}}
+
+	_, err := obtainSignIn(context.Background(), signInConfig{BrowserLogin: true}, fake.ways(), io.Discard)
+
+	require.ErrorIs(t, err, closed)
+	assert.Equal(t, []string{"window"}, fake.used, "-browser-login neither reads the clipboard nor falls back")
+}
+
+func TestObtainSignIn_ConsoleLoginNeverOpensAWindow(t *testing.T) {
+	fake := &fakeSignIn{windowUsable: true}
+
+	tokens, err := obtainSignIn(context.Background(), signInConfig{ConsoleLogin: true}, fake.ways(), io.Discard)
+
+	require.NoError(t, err)
+	assert.Equal(t, "from-console", tokens.RefreshToken)
+	assert.Equal(t, []string{"console"}, fake.used)
+}
+
+func TestSignIn_RejectsContradictoryFlags(t *testing.T) {
+	err := signIn(context.Background(), signInConfig{BrowserLogin: true, ConsoleLogin: true}, io.Discard)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "-browser-login")
+	assert.Contains(t, err.Error(), "-console-login")
+}
+
+func TestCanOpenWindow(t *testing.T) {
+	found := func() (string, error) { return "/usr/bin/google-chrome", nil }
+	missing := func() (string, error) { return "", errors.New("no browser") }
+	noEnv := func(string) string { return "" }
+	x11 := func(key string) string { return map[string]string{"DISPLAY": ":0"}[key] }
+	wayland := func(key string) string { return map[string]string{"WAYLAND_DISPLAY": "wayland-0"}[key] }
+
+	assert.True(t, canOpenWindow("darwin", noEnv, "", found))
+	assert.True(t, canOpenWindow("windows", noEnv, "", found))
+	assert.False(t, canOpenWindow("darwin", noEnv, "", missing), "no browser to open")
+	assert.True(t, canOpenWindow("darwin", noEnv, "/opt/chrome", missing), "-browser names one that is not in the usual places")
+
+	assert.True(t, canOpenWindow("linux", x11, "", found))
+	assert.True(t, canOpenWindow("linux", wayland, "", found))
+	assert.False(t, canOpenWindow("linux", noEnv, "", found), "a server or SSH session has no screen to show a window on")
+	assert.False(t, canOpenWindow("linux", noEnv, "/opt/chrome", found))
 }
