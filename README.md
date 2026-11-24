@@ -13,7 +13,9 @@ analyse or archive years of purchases offline.
 
 中文用户请看分步指南：[docs/GUIDE.zh-CN.md](docs/GUIDE.zh-CN.md)
 
-1. Download the program. On a Mac, in Terminal (Apple Silicon and Intel alike):
+1. Download the latest release.
+
+   **macOS** (Terminal; Apple Silicon and Intel alike):
 
 ```bash
 mkdir -p ~/costco && cd ~/costco
@@ -23,12 +25,31 @@ curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/download/
 chmod +x costco-cli
 ```
 
-   `VERSION` is the latest release (pre-releases are skipped); every file on
+   **Linux** (x64 and ARM64):
+
+```bash
+mkdir -p ~/costco && cd ~/costco
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+VERSION=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/ssjfrank/costco-go/releases/latest | sed -n 's#.*/tag/v##p')
+curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/download/v$VERSION/costco-cli-$VERSION-linux-$ARCH"
+chmod +x costco-cli
+```
+
+   **Windows** (PowerShell):
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\costco" | Out-Null; Set-Location "$HOME\costco"
+$VERSION = (Invoke-RestMethod https://api.github.com/repos/ssjfrank/costco-go/releases/latest).tag_name.TrimStart('v')
+Invoke-WebRequest -OutFile costco-cli.exe "https://github.com/ssjfrank/costco-go/releases/download/v$VERSION/costco-cli-$VERSION-windows-amd64.exe"
+```
+
+   `VERSION` is the latest release (pre-releases are skipped). Every file on
    the [Releases](https://github.com/ssjfrank/costco-go/releases) page carries
-   its version in its name, such as `costco-cli-1.1.0-windows-amd64.exe`.
-   Linux and Windows builds are there too, or build from
-   source with Go 1.24+: `go build -o costco-cli ./cmd/costco-cli`.
-2. Run it:
+   its version in its name, such as `costco-cli-1.1.0-windows-amd64.exe`, and
+   `costco-cli-<version>-SHA256SUMS.txt` lists their checksums. You can also
+   download them from that page by hand, or build from source with Go 1.24+:
+   `go build -o costco-cli ./cmd/costco-cli`.
+2. Run it (on Windows: `.\costco-cli.exe`):
 
 ```bash
 ./costco-cli
@@ -431,7 +452,7 @@ the token needs renewing.
 
 ```bash
 # Once: build the image straight from GitHub (no clone needed).
-docker build -t costco-cli "https://github.com/ssjfrank/costco-go.git#cursor/download-full-order-history-9b26"
+docker build -t costco-cli "https://github.com/ssjfrank/costco-go.git#main"
 
 # Each download: mount the token file and an output directory.
 mkdir -p "$HOME/costco"
@@ -488,8 +509,8 @@ A release is refused when its tag is not `v` followed by that version, so a
 tag can never publish files that claim another version.
 
 ```bash
-git tag v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
+git tag v1.1.0 -m "Release v1.1.0"
+git push origin v1.1.0
 ```
 
 The binaries are cross-compiled with CGO disabled. Go's linker ad-hoc signs

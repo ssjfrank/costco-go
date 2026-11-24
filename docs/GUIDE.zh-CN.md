@@ -28,11 +28,7 @@ chmod +x costco-cli
 
 - `uname -m` 会自动判断你的 Mac 是 Apple 芯片（`arm64`）还是 Intel 芯片（`amd64`），下载对应的版本。
 - `VERSION` 那一行会自动查出最新的正式版本号（例如 `1.1.0`），下载的文件名里带着这个版本号，例如 `costco-cli-1.1.0-darwin-arm64`。
-- 如果 `curl` 提示 `404`，说明还没有发布正式的 Release。把最后一个 `curl` 那一行换成临时下载地址再运行一次：
-
-  ```bash
-  curl -fL -o costco-cli "https://raw.githubusercontent.com/ssjfrank/costco-go/refs/heads/cursor/macos-download-9b26/costco-cli-darwin-$ARCH"
-  ```
+- 也可以打开 [Releases](https://github.com/ssjfrank/costco-go/releases) 页面手动下载：Apple 芯片选 `costco-cli-<版本号>-darwin-arm64`，Intel 芯片选 `costco-cli-<版本号>-darwin-amd64`，下载后改名为 `costco-cli` 放进 `~/costco`，再运行 `chmod +x ~/costco/costco-cli`。Windows 和 Linux 版本也在那里，命令见 [README](../README.md#quick-start)。
 
 - 如果你是用浏览器下载的文件，而不是上面的 `curl`，Mac 可能会提示"无法打开，因为无法验证开发者"。在终端运行 `xattr -d com.apple.quarantine ~/costco/costco-cli` 即可。用 `curl` 下载不会遇到这个问题。
 - 以后每次使用，先运行 `cd ~/costco` 进入这个文件夹。
@@ -41,11 +37,8 @@ chmod +x costco-cli
 >
 > ```bash
 > git clone https://github.com/ssjfrank/costco-go.git && cd costco-go
-> git checkout cursor/download-full-order-history-9b26
 > go build -o costco-cli ./cmd/costco-cli
 > ```
->
-> 这个分支合并进 `main` 之后，就不需要 `git checkout` 那一行了。
 
 ## 第 2 步：运行软件，在弹出的窗口里登录
 
@@ -155,7 +148,7 @@ costco-history/
 2. **构建镜像**（只需一次，直接从 GitHub 构建，不用下载源代码）：
 
    ```bash
-   docker build -t costco-cli "https://github.com/ssjfrank/costco-go.git#cursor/download-full-order-history-9b26"
+   docker build -t costco-cli "https://github.com/ssjfrank/costco-go.git#main"
    ```
 
 3. **运行下载**，把登录文件和输出目录挂载进去：
