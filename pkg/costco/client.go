@@ -188,9 +188,10 @@ func (c *Client) refreshToken() error {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.getLogger().Error("token refresh failed", slog.Int("status_code", resp.StatusCode), slog.String("body", string(body)))
-		// A 4xx means the refresh token itself was refused (expired or revoked);
-		// anything else is an outage that a later retry may get through.
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		// A 4xx means the refresh token itself was refused (expired or revoked),
+		// except for being rate limited or timed out, which say nothing about
+		// the token. Those and everything else may succeed on a later retry.
+		if refreshTokenRefused(resp.StatusCode) {
 			return fmt.Errorf("%w: token refresh rejected with status %d: %s. Run 'costco-cli -cmd login' to sign in again",
 				ErrNotAuthenticated, resp.StatusCode, string(body))
 		}
@@ -201,6 +202,23 @@ func (c *Client) refreshToken() error {
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		c.getLogger().Error("failed to decode refresh response", slog.String("error", err.Error()))
 		return fmt.Errorf("decoding refresh response: %w", err)
+	}
+
+	if tokenResp.IDToken == "" {
+		c.getLogger().Error("refresh response had no id_token")
+		return errors.New("token refresh response did not include an id_token")
+	}
+
+	// A refresh response is not required to carry a new refresh token. Without
+	// one, the token just used stays in use, with the expiry it already had,
+	// rather than being replaced by nothing.
+	refreshTokenExpiresAt := time.Now().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second)
+	if tokenResp.RefreshToken == "" {
+		tokenResp.RefreshToken = refreshToken
+		refreshTokenExpiresAt = time.Time{}
+		if previous, err := LoadTokens(); err == nil && previous != nil {
+			refreshTokenExpiresAt = previous.RefreshTokenExpiresAt
+		}
 	}
 
 	c.mu.Lock()
@@ -215,7 +233,7 @@ func (c *Client) refreshToken() error {
 		IDToken:               tokenResp.IDToken,
 		RefreshToken:          tokenResp.RefreshToken,
 		TokenExpiry:           c.tokenExpiry,
-		RefreshTokenExpiresAt: time.Now().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second),
+		RefreshTokenExpiresAt: refreshTokenExpiresAt,
 	}
 	c.getLogger().Debug("saving refreshed tokens to disk")
 	if err := SaveTokens(storedTokens); err != nil {
@@ -225,6 +243,15 @@ func (c *Client) refreshToken() error {
 	}
 
 	return nil
+}
+
+// refreshTokenRefused reports whether a token endpoint status means the refresh
+// token is no longer accepted, as opposed to the request not getting through.
+func refreshTokenRefused(status int) bool {
+	if status == http.StatusTooManyRequests || status == http.StatusRequestTimeout {
+		return false
+	}
+	return status >= 400 && status < 500
 }
 
 func (c *Client) executeGraphQL(ctx context.Context, query string, variables map[string]interface{}, result interface{}) error {
