@@ -18,12 +18,15 @@ analyse or archive years of purchases offline.
 ```bash
 mkdir -p ~/costco && cd ~/costco
 ARCH=$(uname -m | sed 's/x86_64/amd64/')
-curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/latest/download/costco-cli-darwin-$ARCH"
+VERSION=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/ssjfrank/costco-go/releases/latest | sed -n 's#.*/tag/v##p')
+curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/download/v$VERSION/costco-cli-$VERSION-darwin-$ARCH"
 chmod +x costco-cli
 ```
 
-   Linux and Windows builds are on the
-   [Releases](https://github.com/ssjfrank/costco-go/releases) page, or build from
+   `VERSION` is the latest release (pre-releases are skipped); every file on
+   the [Releases](https://github.com/ssjfrank/costco-go/releases) page carries
+   its version in its name, such as `costco-cli-1.1.0-windows-amd64.exe`.
+   Linux and Windows builds are there too, or build from
    source with Go 1.24+: `go build -o costco-cli ./cmd/costco-cli`.
 2. Run it:
 
@@ -467,16 +470,22 @@ example `costco-cli -since 2026-01-01`.
 
 Every CI run (each pull request and push to `main`) builds the same binaries
 and attaches them to the run: open the run under **Actions** and download
-`costco-cli-windows-amd64.exe`, `costco-cli-linux-amd64` and the rest from its
-**Artifacts** section. GitHub delivers each one as a zip and keeps it for 90
+`costco-cli-1.1.0-windows-amd64.exe`, `costco-cli-1.1.0-linux-amd64` and the
+rest from its **Artifacts** section. GitHub delivers each one as a zip and keeps it for 90
 days. The `Build` jobs also start the Windows, Linux and Apple Silicon binaries
 on matching machines to check that they run.
 
 Pushing a version tag publishes a release. `.github/workflows/release.yml` runs
 the tests, builds macOS (Apple Silicon and Intel), Linux and Windows binaries
 with `scripts/build-release.sh`, and attaches them to a GitHub Release along
-with `SHA256SUMS`. Tags with a suffix, such as `v1.0.0-rc.1`, become
-pre-releases.
+with `costco-cli-<version>-SHA256SUMS.txt`. Tags with a suffix, such as
+`v1.1.0-rc.1`, become pre-releases.
+
+Every file is named after the `Version` in `pkg/costco/constants.go`
+(`costco-cli-1.1.0-linux-amd64`, `costco-cli-1.1.0-windows-amd64.exe`, ...),
+and `costco-cli -version` prints that version and the commit it was built from.
+A release is refused when its tag is not `v` followed by that version, so a
+tag can never publish files that claim another version.
 
 ```bash
 git tag v1.0.0 -m "Release v1.0.0"

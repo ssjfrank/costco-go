@@ -104,6 +104,8 @@ jobs:
   binaries:
     name: Binaries
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout code
@@ -114,48 +116,52 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Read the version
+        id: version
+        run: echo "version=$(sed -n 's/^[[:space:]]*Version = "\([^"]*\)".*/\1/p' pkg/costco/constants.go)" >> "$GITHUB_OUTPUT"
+
       - name: Build every platform
         run: scripts/build-release.sh dist
 
       - name: Upload Windows (x64)
         uses: actions/upload-artifact@v4
         with:
-          name: costco-cli-windows-amd64.exe
-          path: dist/costco-cli-windows-amd64.exe
+          name: costco-cli-${{ steps.version.outputs.version }}-windows-amd64.exe
+          path: dist/costco-cli-${{ steps.version.outputs.version }}-windows-amd64.exe
           if-no-files-found: error
 
       - name: Upload Linux (x64)
         uses: actions/upload-artifact@v4
         with:
-          name: costco-cli-linux-amd64
-          path: dist/costco-cli-linux-amd64
+          name: costco-cli-${{ steps.version.outputs.version }}-linux-amd64
+          path: dist/costco-cli-${{ steps.version.outputs.version }}-linux-amd64
           if-no-files-found: error
 
       - name: Upload Linux (ARM64)
         uses: actions/upload-artifact@v4
         with:
-          name: costco-cli-linux-arm64
-          path: dist/costco-cli-linux-arm64
+          name: costco-cli-${{ steps.version.outputs.version }}-linux-arm64
+          path: dist/costco-cli-${{ steps.version.outputs.version }}-linux-arm64
           if-no-files-found: error
 
       - name: Upload macOS (Apple Silicon)
         uses: actions/upload-artifact@v4
         with:
-          name: costco-cli-darwin-arm64
-          path: dist/costco-cli-darwin-arm64
+          name: costco-cli-${{ steps.version.outputs.version }}-darwin-arm64
+          path: dist/costco-cli-${{ steps.version.outputs.version }}-darwin-arm64
           if-no-files-found: error
 
       - name: Upload macOS (Intel)
         uses: actions/upload-artifact@v4
         with:
-          name: costco-cli-darwin-amd64
-          path: dist/costco-cli-darwin-amd64
+          name: costco-cli-${{ steps.version.outputs.version }}-darwin-amd64
+          path: dist/costco-cli-${{ steps.version.outputs.version }}-darwin-amd64
           if-no-files-found: error
 
-      - name: Upload all platforms with SHA256SUMS
+      - name: Upload all platforms with checksums
         uses: actions/upload-artifact@v4
         with:
-          name: costco-cli-all-platforms
+          name: costco-cli-${{ steps.version.outputs.version }}-all-platforms
           path: dist/
           if-no-files-found: error
 
@@ -168,13 +174,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            binary: costco-cli-linux-amd64
+            target: linux-amd64
           - os: ubuntu-24.04-arm
-            binary: costco-cli-linux-arm64
+            target: linux-arm64
           - os: macos-latest
-            binary: costco-cli-darwin-arm64
+            target: darwin-arm64
           - os: windows-latest
-            binary: costco-cli-windows-amd64.exe
+            target: windows-amd64.exe
+    env:
+      BINARY: costco-cli-${{ needs.binaries.outputs.version }}-${{ matrix.target }}
 
     steps:
       - name: Checkout code
@@ -191,15 +199,15 @@ jobs:
       - name: Download the binary built for this platform
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.binary }}
+          name: ${{ env.BINARY }}
           path: dist
 
       - name: Run the downloaded binary
         shell: bash
         run: |
-          binary="dist/${{ matrix.binary }}"
+          binary="dist/$BINARY"
           chmod +x "$binary"
-          want=$(sed -n 's/.*Version = "\(.*\)".*/\1/p' pkg/costco/constants.go)
+          want="${{ needs.binaries.outputs.version }}"
           got=$("./$binary" -version)
           echo "$got"
           case "$got" in

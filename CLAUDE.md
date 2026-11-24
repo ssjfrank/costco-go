@@ -137,7 +137,7 @@ git tag vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The tag push triggers `.github/workflows/release.yml`, which tests, builds every platform with `scripts/build-release.sh` and publishes the GitHub Release. macOS users download from `releases/latest/download/costco-cli-darwin-<arch>`, which skips pre-releases, so only a plain `vX.Y.Z` tag updates what they get.
+The tag push triggers `.github/workflows/release.yml`, which tests, builds every platform with `scripts/build-release.sh` and publishes the GitHub Release. Every file it builds carries the version in its name (`costco-cli-X.Y.Z-windows-amd64.exe`, `costco-cli-X.Y.Z-SHA256SUMS.txt`), and the workflow refuses a tag that is not `v` + the `Version` constant, so bump the version before tagging. The README's macOS `curl` looks the version up from `releases/latest`, which skips pre-releases, so only a plain `vX.Y.Z` tag updates what users get; it needs no edit per release. CI uploads the same versioned files as run artifacts.
 
 ### Versioning Checklist
 

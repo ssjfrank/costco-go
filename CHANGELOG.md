@@ -13,7 +13,8 @@ leave receipts without line items or shrink the index files.
 ### Added
 - **`-console-login`**: Sign in only with the console command in your own browser; never open a window.
 - **`-temp-profile`**: Give the sign-in window a throwaway profile that is deleted when the window closes, so no Costco cookies are kept on disk.
-- **Binaries from every CI run**: The `Binaries` job builds Windows, Linux and macOS executables with `scripts/build-release.sh` on every pull request and push to `main`, and attaches each to the run as a download. The `Build` jobs then run the Windows, Linux (x64 and ARM64) and Apple Silicon binaries on matching machines. CI can also be started by hand (`workflow_dispatch`).
+- **Binaries from every CI run**: The `Binaries` job builds Windows, Linux and macOS executables with `scripts/build-release.sh` on every pull request and push to `main`, and attaches each to the run as a download.
+- **Versioned file names**: Every built file carries the version, for example `costco-cli-1.1.0-windows-amd64.exe`, `costco-cli-1.1.0-linux-amd64` and `costco-cli-1.1.0-SHA256SUMS.txt` (previously `costco-cli-windows-amd64.exe` and `SHA256SUMS`). The release workflow refuses a tag that does not match the `Version` constant. The macOS download command in the README looks up the latest version first, so it keeps working without edits. The `Build` jobs then run the Windows, Linux (x64 and ARM64) and Apple Silicon binaries on matching machines. CI can also be started by hand (`workflow_dispatch`).
 - **`BrowserLoginOptions.ProfileDir`** and **`BrowserProfileDir()`**: Keep the sign-in window's profile between sign-ins, and the folder the CLI keeps it in (`~/.costco/browser-profile`). `costco-cli -cmd info` shows whether that folder exists.
 
 ### Changed

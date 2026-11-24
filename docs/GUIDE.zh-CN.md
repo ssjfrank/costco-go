@@ -18,7 +18,8 @@
 ```bash
 mkdir -p ~/costco && cd ~/costco
 ARCH=$(uname -m | sed 's/x86_64/amd64/')
-curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/latest/download/costco-cli-darwin-$ARCH"
+VERSION=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/ssjfrank/costco-go/releases/latest | sed -n 's#.*/tag/v##p')
+curl -fL -o costco-cli "https://github.com/ssjfrank/costco-go/releases/download/v$VERSION/costco-cli-$VERSION-darwin-$ARCH"
 chmod +x costco-cli
 ./costco-cli -version
 ```
@@ -26,7 +27,8 @@ chmod +x costco-cli
 看到类似 `costco-cli 1.1.0 (commit ...)` 就说明下载成功。程序和下载的数据都放在你个人目录下的 `costco` 文件夹里（`~/costco`）。
 
 - `uname -m` 会自动判断你的 Mac 是 Apple 芯片（`arm64`）还是 Intel 芯片（`amd64`），下载对应的版本。
-- 如果 `curl` 提示 `404`，说明还没有发布正式的 Release。把第三行换成临时下载地址再运行一次：
+- `VERSION` 那一行会自动查出最新的正式版本号（例如 `1.1.0`），下载的文件名里带着这个版本号，例如 `costco-cli-1.1.0-darwin-arm64`。
+- 如果 `curl` 提示 `404`，说明还没有发布正式的 Release。把最后一个 `curl` 那一行换成临时下载地址再运行一次：
 
   ```bash
   curl -fL -o costco-cli "https://raw.githubusercontent.com/ssjfrank/costco-go/refs/heads/cursor/macos-download-9b26/costco-cli-darwin-$ARCH"
@@ -219,7 +221,7 @@ costco-history/
 
 - 剪贴板里的登录信息等同于你的 Costco 登录状态。导入后，建议随便复制一段别的文字把它覆盖掉；不要把它发给任何人。
 - 令牌保存在 `~/.costco/tokens.json`，登录窗口的 Cookie 保存在 `~/.costco/browser-profile`，下载的数据保存在 `~/costco/costco-history`，三者都设置为只有你自己的系统账户可以读取。如果你是在项目源代码目录里运行的，项目的 `.gitignore` 已经排除了 `costco-history/` 和 `token.json`。
-- 下载的程序可以用 Release 里的 `SHA256SUMS` 核对：`shasum -a 256 costco-cli`，结果应与 `SHA256SUMS` 里对应的那一行一致。
+- 下载的程序可以用 Release 里的 `costco-cli-<版本号>-SHA256SUMS.txt` 核对：`shasum -a 256 costco-cli`，结果应与里面对应那一行（例如 `costco-cli-1.1.0-darwin-arm64`）一致。
 - 收据里有会员号、地址和付款信息，**不要**把 `costco-history`、`tokens.json` 或 `browser-profile` 上传到网上或分享给别人。
 - 如果怀疑令牌泄露，先删除 `~/.costco/tokens.json` 和 `~/.costco/browser-profile`，再到 costco.com 退出登录并更新账户安全设置。已经发出的令牌能否立即作废由 Costco 决定，本工具无法控制；最迟大约 90 天后它会自然过期。
 
