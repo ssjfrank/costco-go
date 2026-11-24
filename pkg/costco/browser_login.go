@@ -27,6 +27,14 @@ type BrowserLoginOptions struct {
 	// Empty means the first one found in the usual install locations.
 	BrowserPath string
 
+	// ProfileDir is a browser profile to sign in with and keep, such as the one
+	// BrowserProfileDir names. Costco's cookies stay in it, so a later sign-in
+	// can finish without the user typing anything. The directory is readable
+	// by the current user only and nothing in it is sent anywhere but to the
+	// sites the window visits. Empty means a temporary profile that is deleted
+	// as soon as the sign-in ends.
+	ProfileDir string
+
 	// Timeout bounds how long to wait for the user to finish signing in
 	// (default 10 minutes).
 	Timeout time.Duration
@@ -64,11 +72,12 @@ func (o BrowserLoginOptions) report(message string) {
 	}
 }
 
-// LoginWithBrowser opens costco.com in a new browser window with a private,
-// temporary profile and waits while the user signs in there, using any method
-// Costco offers (password, passkey, security key, two-step verification). When
+// LoginWithBrowser opens costco.com in a new browser window with a profile of
+// its own and waits while the user signs in there, using any method Costco
+// offers (password, passkey, security key, two-step verification). When
 // costco.com receives its OAuth tokens, LoginWithBrowser returns the same
-// response, closes the window, and deletes the profile.
+// response and closes the window. The profile is deleted, unless
+// opts.ProfileDir asks for it to be kept for the next sign-in.
 //
 // The library never sees the user's credentials: it only reads the token
 // response the site itself receives, exactly as the manual DevTools import does.
@@ -90,8 +99,9 @@ func LoginWithBrowser(ctx context.Context, opts BrowserLoginOptions) (*TokenResp
 	defer cancel()
 
 	session, err := browser.Launch(signInCtx, browser.LaunchOptions{
-		Path:     path,
-		Headless: opts.headless,
+		Path:       path,
+		Headless:   opts.headless,
+		ProfileDir: opts.ProfileDir,
 		// Chrome reports any window with a DevTools port as automated
 		// (navigator.webdriver), and sign-in pages may refuse automated browsers.
 		// A person does the signing in here; the tool only reads the response.
