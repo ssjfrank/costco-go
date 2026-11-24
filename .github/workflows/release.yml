@@ -1,7 +1,9 @@
 name: Release
 
-# Pushing a tag such as v1.0.0 builds costco-cli for macOS (Apple Silicon and
+# Pushing a tag such as v1.1.0 builds costco-cli for macOS (Apple Silicon and
 # Intel), Linux and Windows and publishes the binaries as a GitHub Release.
+# The tag must match the Version in pkg/costco/constants.go, and every file
+# name carries it (costco-cli-1.1.0-windows-amd64.exe).
 # Tags with a suffix (v1.0.0-rc.1) are published as pre-releases.
 on:
   push:
@@ -22,6 +24,15 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Check the tag matches the version in the code
+        run: |
+          version=$(sed -n 's/^[[:space:]]*Version = "\([^"]*\)".*/\1/p' pkg/costco/constants.go)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match Version = \"$version\" in pkg/costco/constants.go."
+            echo "Tag the commit that bumps the version, as v$version."
+            exit 1
+          fi
 
       - name: Test
         run: go test -short ./...

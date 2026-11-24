@@ -6,18 +6,28 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
+	"github.com/eshaffer321/costco-go/internal/browser"
 	"github.com/eshaffer321/costco-go/pkg/costco"
 )
 
-// signInConfig selects how a sign-in happens.
+// signInConfig selects how a sign-in happens. With neither BrowserLogin nor
+// ConsoleLogin set, a window is opened where one can be, and the console
+// command is the fallback.
 type signInConfig struct {
-	// BrowserLogin opens a sign-in window in a browser the tool starts itself,
-	// instead of asking for the console snippet's output.
+	// BrowserLogin signs in through a window the tool opens, and nothing else.
 	BrowserLogin bool
 	BrowserPath  string
+
+	// ConsoleLogin signs in with the console command, and never opens a window.
+	ConsoleLogin bool
+
+	// TempProfile gives the sign-in window a throwaway browser profile instead
+	// of the kept one, so no Costco cookies stay on disk afterwards.
+	TempProfile bool
 
 	// NonInteractive never asks for a sign-in; commands fail with instructions.
 	NonInteractive bool
@@ -65,20 +75,41 @@ func tokenFileForMessages() string {
 	return path
 }
 
+// signInWays are the ways of getting a sign-in. Tests replace them.
+type signInWays struct {
+	// clipboard returns a sign-in the console command has already copied, or nil.
+	clipboard func(context.Context) *costco.TokenResponse
+
+	// windowUsable reports whether a sign-in window can be opened here.
+	windowUsable func() bool
+	window       func(context.Context) (*costco.TokenResponse, error)
+
+	console func(context.Context) (*costco.TokenResponse, error)
+}
+
 // signIn gets a new sign-in the configured way and saves it.
 func signIn(ctx context.Context, cfg signInConfig, out io.Writer) error {
 	if cfg.NonInteractive {
 		return notSignedInError()
 	}
-	if cfg.BrowserLogin {
-		return signInWithBrowser(ctx, cfg.BrowserPath, out)
+	if cfg.BrowserLogin && cfg.ConsoleLogin {
+		return errors.New("-browser-login and -console-login are two different ways to sign in; pass one of them")
 	}
 
 	stale := ""
 	if saved, _ := costco.LoadTokens(); saved != nil {
 		stale = saved.RefreshToken
 	}
-	response, err := consoleSignIn{lines: stdinLines(), out: out, clipboard: readClipboard, stale: stale}.run(ctx)
+	console := consoleSignIn{lines: stdinLines(), out: out, clipboard: readClipboard, stale: stale}
+
+	response, err := obtainSignIn(ctx, cfg, signInWays{
+		clipboard: console.fromClipboard,
+		windowUsable: func() bool {
+			return canOpenWindow(runtime.GOOS, os.Getenv, cfg.BrowserPath, browser.FindExecutable)
+		},
+		window:  func(ctx context.Context) (*costco.TokenResponse, error) { return openSignInWindow(ctx, cfg, out) },
+		console: console.run,
+	}, out)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return errors.New("sign-in cancelled")
@@ -88,19 +119,66 @@ func signIn(ctx context.Context, cfg signInConfig, out io.Writer) error {
 	return saveSignIn(response, out)
 }
 
-// signInWithBrowser opens the sign-in window and saves the tokens it yields.
-func signInWithBrowser(ctx context.Context, browserPath string, out io.Writer) error {
-	response, err := costco.LoginWithBrowser(ctx, costco.BrowserLoginOptions{
-		BrowserPath: browserPath,
-		Progress:    func(message string) { fmt.Fprintln(out, message) },
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return errors.New("sign-in cancelled")
+// obtainSignIn picks the way to sign in. Left to itself it asks for as little
+// as it can: a sign-in the console command already copied is used as it is,
+// otherwise a window opens, and the console command is explained only where no
+// window can open or the window did not work out.
+func obtainSignIn(ctx context.Context, cfg signInConfig, ways signInWays, out io.Writer) (*costco.TokenResponse, error) {
+	switch {
+	case cfg.ConsoleLogin:
+		return ways.console(ctx)
+	case cfg.BrowserLogin:
+		response, err := ways.window(ctx)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return nil, fmt.Errorf("signing in: %w", err)
 		}
-		return fmt.Errorf("signing in: %w", err)
+		return response, err
 	}
-	return saveSignIn(response, out)
+
+	if response := ways.clipboard(ctx); response != nil {
+		return response, nil
+	}
+	if ways.windowUsable() {
+		response, err := ways.window(ctx)
+		if err == nil {
+			return response, nil
+		}
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return nil, err
+		}
+		fmt.Fprintf(out, "\nThe sign-in window did not work: %v.\nYou can sign in with your usual browser instead.\n\n", err)
+	}
+	return ways.console(ctx)
+}
+
+// canOpenWindow reports whether a sign-in window can be shown on this machine:
+// there has to be a browser to start and, outside macOS and Windows, a display
+// to show it on, which a server or an SSH session does not have.
+func canOpenWindow(goos string, getenv func(string) string, browserPath string, findBrowser func() (string, error)) bool {
+	if goos != "darwin" && goos != "windows" && getenv("DISPLAY") == "" && getenv("WAYLAND_DISPLAY") == "" {
+		return false
+	}
+	if browserPath != "" {
+		return true
+	}
+	_, err := findBrowser()
+	return err == nil
+}
+
+// openSignInWindow opens the sign-in window and returns the tokens it yields.
+func openSignInWindow(ctx context.Context, cfg signInConfig, out io.Writer) (*costco.TokenResponse, error) {
+	options := costco.BrowserLoginOptions{
+		BrowserPath: cfg.BrowserPath,
+		Progress:    func(message string) { fmt.Fprintln(out, message) },
+	}
+	if !cfg.TempProfile {
+		profileDir, err := costco.BrowserProfileDir()
+		if err != nil {
+			return nil, err
+		}
+		options.ProfileDir = profileDir
+	}
+	return costco.LoginWithBrowser(ctx, options)
 }
 
 func saveSignIn(response *costco.TokenResponse, out io.Writer) error {

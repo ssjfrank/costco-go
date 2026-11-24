@@ -68,6 +68,13 @@ func TestDownloadConfig_PassesTuningThrough(t *testing.T) {
 	assert.True(t, options.Force)
 }
 
+func TestDownloadConfig_WaitsBetweenRetries(t *testing.T) {
+	options, err := downloadConfig{Retries: 3}.historyOptions(time.Now())
+	require.NoError(t, err)
+
+	assert.Equal(t, time.Second, options.RetryDelay, "retrying a rate-limited or failing call at once cannot help")
+}
+
 func TestPrintSummary(t *testing.T) {
 	history := &costco.History{
 		Since: time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC),

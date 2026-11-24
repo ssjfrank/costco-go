@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -31,7 +32,9 @@ type ManifestEntry struct {
 	File        string  `json:"file"`
 }
 
-// Manifest summarises a download and indexes every file it produced.
+// Manifest summarises the archive directory and indexes every record in it,
+// including records saved by earlier runs. Since and Until span every run
+// written to the directory; GeneratedAt and Warnings describe the latest one.
 type Manifest struct {
 	LibraryVersion        string          `json:"library_version"`
 	GeneratedAt           time.Time       `json:"generated_at"`
@@ -108,63 +111,153 @@ func (s *FileStore) LoadReceipt(barcode string) (*Receipt, error) {
 	return &receipt, nil
 }
 
-// WriteHistory writes every record plus the combined files and the manifest.
-// It is safe to call after a partially resumed download; existing files are replaced.
+// WriteHistory saves every record of this run, then rewrites the combined files
+// and the manifest from everything in the directory. Records saved by earlier
+// runs stay indexed, so a later run over a narrower date range adds to the
+// archive instead of shrinking its index.
 func (s *FileStore) WriteHistory(history *History) error {
-	manifest := Manifest{
-		LibraryVersion:        Version,
-		GeneratedAt:           history.GeneratedAt,
-		Since:                 history.Since.Format("2006-01-02"),
-		Until:                 history.Until.Format("2006-01-02"),
-		OrderCount:            len(history.Orders),
-		ReceiptCount:          len(history.Receipts),
-		ItemCount:             history.ItemCount(),
-		OnlineOrderTotal:      history.OnlineOrderTotal(),
-		WarehouseReceiptTotal: history.WarehouseReceiptTotal(),
-		Warnings:              history.Warnings,
-		Orders:                make([]ManifestEntry, 0, len(history.Orders)),
-		Receipts:              make([]ManifestEntry, 0, len(history.Receipts)),
-	}
-
 	for i := range history.Orders {
-		order := history.Orders[i]
-		if err := s.SaveOrder(&order); err != nil {
+		if err := s.SaveOrder(&history.Orders[i]); err != nil {
 			return err
 		}
+	}
+	for i := range history.Receipts {
+		if err := s.SaveReceipt(&history.Receipts[i]); err != nil {
+			return err
+		}
+	}
+
+	orders, unreadableOrders, err := readArchive[OnlineOrder](s.dir, ordersDirName)
+	if err != nil {
+		return err
+	}
+	receipts, unreadableReceipts, err := readArchive[Receipt](s.dir, receiptsDirName)
+	if err != nil {
+		return err
+	}
+	sort.SliceStable(orders, func(i, j int) bool {
+		return orders[i].record.OrderPlacedDate > orders[j].record.OrderPlacedDate
+	})
+	sort.SliceStable(receipts, func(i, j int) bool {
+		return receipts[i].record.TransactionDateTime > receipts[j].record.TransactionDateTime
+	})
+
+	archive := History{
+		Orders:   make([]OnlineOrder, 0, len(orders)),
+		Receipts: make([]Receipt, 0, len(receipts)),
+	}
+	orderEntries := make([]ManifestEntry, 0, len(orders))
+	for _, stored := range orders {
+		order := stored.record
 		id := order.OrderNumber
 		if id == "" {
 			id = order.OrderHeaderID
 		}
-		manifest.Orders = append(manifest.Orders, ManifestEntry{
+		archive.Orders = append(archive.Orders, order)
+		orderEntries = append(orderEntries, ManifestEntry{
 			ID:          id,
 			Date:        dayOf(order.OrderPlacedDate),
 			Total:       order.OrderTotal,
 			Description: order.Status,
-			File:        filepath.Join(ordersDirName, sanitizeFilename(id)+".json"),
+			File:        stored.file,
 		})
 	}
-
-	for i := range history.Receipts {
-		receipt := history.Receipts[i]
-		if err := s.SaveReceipt(&receipt); err != nil {
-			return err
-		}
-		manifest.Receipts = append(manifest.Receipts, ManifestEntry{
+	receiptEntries := make([]ManifestEntry, 0, len(receipts))
+	for _, stored := range receipts {
+		receipt := stored.record
+		archive.Receipts = append(archive.Receipts, receipt)
+		receiptEntries = append(receiptEntries, ManifestEntry{
 			ID:          receipt.TransactionBarcode,
 			Date:        dayOf(receipt.TransactionDateTime),
 			Total:       receipt.Total,
 			Description: receipt.WarehouseName,
-			File:        filepath.Join(receiptsDirName, sanitizeFilename(receipt.TransactionBarcode)+".json"),
+			File:        stored.file,
 		})
 	}
 
-	if err := writeJSONFile(filepath.Join(s.dir, ordersFileName), history.Orders); err != nil {
+	warnings := append([]string(nil), history.Warnings...)
+	for _, file := range append(unreadableOrders, unreadableReceipts...) {
+		warnings = append(warnings, fmt.Sprintf("%s could not be read and is left out of the index", file))
+	}
+
+	since, until := s.archiveRange(history)
+	manifest := Manifest{
+		LibraryVersion:        Version,
+		GeneratedAt:           history.GeneratedAt,
+		Since:                 since.Format("2006-01-02"),
+		Until:                 until.Format("2006-01-02"),
+		OrderCount:            len(archive.Orders),
+		ReceiptCount:          len(archive.Receipts),
+		ItemCount:             archive.ItemCount(),
+		OnlineOrderTotal:      archive.OnlineOrderTotal(),
+		WarehouseReceiptTotal: archive.WarehouseReceiptTotal(),
+		Warnings:              warnings,
+		Orders:                orderEntries,
+		Receipts:              receiptEntries,
+	}
+
+	if err := writeJSONFile(filepath.Join(s.dir, ordersFileName), archive.Orders); err != nil {
 		return err
 	}
-	if err := writeJSONFile(filepath.Join(s.dir, receiptsFileName), history.Receipts); err != nil {
+	if err := writeJSONFile(filepath.Join(s.dir, receiptsFileName), archive.Receipts); err != nil {
 		return err
 	}
 	return writeJSONFile(filepath.Join(s.dir, manifestFileName), manifest)
+}
+
+// archiveRange widens this run's date range to cover the ranges of earlier
+// runs, as recorded in the manifest they left behind.
+func (s *FileStore) archiveRange(history *History) (since, until time.Time) {
+	since, until = history.Since, history.Until
+
+	data, err := os.ReadFile(s.ManifestPath())
+	if err != nil {
+		return since, until
+	}
+	var previous Manifest
+	if json.Unmarshal(data, &previous) != nil {
+		return since, until
+	}
+	if earlier, err := time.Parse("2006-01-02", previous.Since); err == nil && earlier.Before(since) {
+		since = earlier
+	}
+	if later, err := time.Parse("2006-01-02", previous.Until); err == nil && later.After(until) {
+		until = later
+	}
+	return since, until
+}
+
+// archived is a record read back from the store, with the file it lives in
+// relative to the store's root.
+type archived[T any] struct {
+	record T
+	file   string
+}
+
+// readArchive decodes every JSON file in a subdirectory of the store. A file
+// that cannot be decoded is returned by name rather than failing the call: one
+// damaged file must not keep the rest of the archive out of the index.
+func readArchive[T any](root, subdir string) (records []archived[T], unreadable []string, err error) {
+	entries, err := os.ReadDir(filepath.Join(root, subdir))
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing %s: %w", filepath.Join(root, subdir), err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		file := filepath.Join(subdir, entry.Name())
+
+		var record T
+		data, readErr := os.ReadFile(filepath.Join(root, file))
+		if readErr != nil || json.Unmarshal(data, &record) != nil {
+			unreadable = append(unreadable, file)
+			continue
+		}
+		records = append(records, archived[T]{record: record, file: file})
+	}
+	return records, unreadable, nil
 }
 
 // ManifestPath returns the location of the manifest written by WriteHistory.

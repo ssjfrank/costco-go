@@ -11,9 +11,10 @@ import (
 // Configuration and token persistence
 
 const (
-	configDir  = ".costco"
-	configFile = "config.json"
-	tokenFile  = "tokens.json"
+	configDir         = ".costco"
+	configFile        = "config.json"
+	tokenFile         = "tokens.json"
+	browserProfileDir = "browser-profile"
 )
 
 // TokenFileEnv names the environment variable that points at the token file,
@@ -31,6 +32,17 @@ func TokenFilePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(configPath, tokenFile), nil
+}
+
+// BrowserProfileDir returns the directory, ~/.costco/browser-profile, where a
+// sign-in window can keep its browser profile between sign-ins. See
+// BrowserLoginOptions.ProfileDir.
+func BrowserProfileDir() (string, error) {
+	configPath, err := getConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configPath, browserProfileDir), nil
 }
 
 // rejectDirectoryTokenFile catches the directory Docker creates when asked to
@@ -148,10 +160,10 @@ func SaveTokens(tokens *StoredTokens) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectDirectoryTokenFile(filePath); err != nil {
+	if err = rejectDirectoryTokenFile(filePath); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(filePath), 0700); err != nil {
+	if err = os.MkdirAll(filepath.Dir(filePath), 0700); err != nil {
 		return err
 	}
 
@@ -186,7 +198,7 @@ func LoadTokens() (*StoredTokens, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectDirectoryTokenFile(filePath); err != nil {
+	if err = rejectDirectoryTokenFile(filePath); err != nil {
 		return nil, err
 	}
 
@@ -253,7 +265,7 @@ func GetConfigInfo() string {
 
 	// Check if config exists
 	configFile := filepath.Join(configPath, configFile)
-	if _, err := os.Stat(configFile); err == nil {
+	if _, err = os.Stat(configFile); err == nil {
 		info += fmt.Sprintf("Config file: %s (exists)\n", configFile)
 	} else {
 		info += fmt.Sprintf("Config file: %s (not found)\n", configFile)
@@ -278,6 +290,13 @@ func GetConfigInfo() string {
 		}
 	} else {
 		info += fmt.Sprintf("Token file: %s (not found)\n", tokenFile)
+	}
+
+	profileDir := filepath.Join(configPath, browserProfileDir)
+	if _, err := os.Stat(profileDir); err == nil {
+		info += fmt.Sprintf("Sign-in window profile: %s (exists; holds Costco's cookies, delete it to remove them)\n", profileDir)
+	} else {
+		info += fmt.Sprintf("Sign-in window profile: %s (not found)\n", profileDir)
 	}
 
 	return info

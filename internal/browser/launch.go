@@ -18,6 +18,9 @@ const (
 	startupTimeout = 30 * time.Second
 	closeTimeout   = 5 * time.Second
 
+	// devToolsPortFile is written into the profile by the browser at startup.
+	devToolsPortFile = "DevToolsActivePort"
+
 	// DevTools messages are small, but the library default of 32 KiB is too
 	// tight for some events, such as responses carrying large headers.
 	maxMessageSize = 32 << 20
@@ -34,16 +37,24 @@ type LaunchOptions struct {
 
 	// Args are extra command line flags.
 	Args []string
+
+	// ProfileDir is a browser profile to use and keep, so that a later launch
+	// finds the cookies of an earlier sign-in. It is created readable by the
+	// current user only and Close leaves it in place. Empty means a temporary
+	// profile that Close deletes.
+	ProfileDir string
 }
 
-// Browser is a running browser with a private, temporary profile. The profile
-// holds the session of whoever signs in, so Close deletes it.
+// Browser is a running browser with a private profile of its own. The profile
+// holds the session of whoever signs in, so Close deletes it unless the caller
+// named a directory to keep it in.
 type Browser struct {
-	cmd        *exec.Cmd
-	profileDir string
-	conn       *websocket.Conn
-	stderr     *stderrWatcher
-	exited     chan struct{}
+	cmd         *exec.Cmd
+	profileDir  string
+	keepProfile bool
+	conn        *websocket.Conn
+	stderr      *stderrWatcher
+	exited      chan struct{}
 
 	closeOnce sync.Once
 	closeErr  error
@@ -61,38 +72,26 @@ func Launch(ctx context.Context, opts LaunchOptions) (*Browser, error) {
 		path = found
 	}
 
-	profileDir, err := os.MkdirTemp("", "costco-login-")
+	profileDir, keepProfile, err := prepareProfile(opts.ProfileDir)
 	if err != nil {
-		return nil, fmt.Errorf("creating a temporary browser profile: %w", err)
+		return nil, err
 	}
-
-	args := []string{
-		// Port 0 lets the browser pick a free port and report it back, so two
-		// sign-ins can never collide and no fixed port is left open.
-		"--remote-debugging-port=0",
-		"--user-data-dir=" + profileDir,
-		"--no-first-run",
-		"--no-default-browser-check",
-	}
-	if opts.Headless {
-		args = append(args, "--headless=new")
-	}
-	args = append(args, opts.Args...)
-	args = append(args, "about:blank")
 
 	watcher := newStderrWatcher()
-	cmd := exec.Command(path, args...)
+	cmd := exec.Command(path, launchArgs(opts, profileDir)...)
 	cmd.Stderr = watcher
 	// Helper processes inherit stderr and can outlive the browser for a moment;
 	// don't let them hold Wait open.
 	cmd.WaitDelay = 2 * time.Second
 
-	if err := cmd.Start(); err != nil {
-		_ = os.RemoveAll(profileDir)
+	if err = cmd.Start(); err != nil {
+		if !keepProfile {
+			_ = os.RemoveAll(profileDir)
+		}
 		return nil, fmt.Errorf("starting browser %s: %w", path, err)
 	}
 
-	b := &Browser{cmd: cmd, profileDir: profileDir, stderr: watcher, exited: make(chan struct{})}
+	b := &Browser{cmd: cmd, profileDir: profileDir, keepProfile: keepProfile, stderr: watcher, exited: make(chan struct{})}
 	go func() {
 		_ = cmd.Wait()
 		close(b.exited)
@@ -115,7 +114,55 @@ func Launch(ctx context.Context, opts LaunchOptions) (*Browser, error) {
 	return b, nil
 }
 
-// ProfileDir returns the temporary profile directory that Close removes.
+// prepareProfile returns the profile directory to launch with and whether it
+// outlives the browser.
+func prepareProfile(named string) (dir string, keep bool, err error) {
+	if named == "" {
+		dir, err = os.MkdirTemp("", "costco-login-")
+		if err != nil {
+			return "", false, fmt.Errorf("creating a temporary browser profile: %w", err)
+		}
+		return dir, false, nil
+	}
+
+	if err := os.MkdirAll(named, 0o700); err != nil {
+		return "", false, fmt.Errorf("creating the browser profile %s: %w", named, err)
+	}
+	// MkdirAll leaves an existing directory's permissions alone.
+	if err := os.Chmod(named, 0o700); err != nil {
+		return "", false, fmt.Errorf("making the browser profile %s private: %w", named, err)
+	}
+	// A browser that was killed leaves its port file behind, and waitForDevTools
+	// would read the dead browser's address from it.
+	_ = os.Remove(filepath.Join(named, devToolsPortFile))
+	return named, true, nil
+}
+
+// launchArgs builds the browser's command line.
+func launchArgs(opts LaunchOptions, profileDir string) []string {
+	args := []string{
+		// Port 0 lets the browser pick a free port and report it back, so two
+		// sign-ins can never collide and no fixed port is left open.
+		"--remote-debugging-port=0",
+		"--user-data-dir=" + profileDir,
+		"--no-first-run",
+		"--no-default-browser-check",
+		// The profile holds a Costco session. The browser itself must not send
+		// any of it elsewhere: no account sync, no crash dumps, no usage
+		// metrics, no background requests of its own.
+		"--disable-sync",
+		"--disable-breakpad",
+		"--metrics-recording-only",
+		"--disable-background-networking",
+	}
+	if opts.Headless {
+		args = append(args, "--headless=new")
+	}
+	args = append(args, opts.Args...)
+	return append(args, "about:blank")
+}
+
+// ProfileDir returns the profile directory the browser is running with.
 func (b *Browser) ProfileDir() string { return b.profileDir }
 
 // Capture opens watch.StartURL and blocks until the watched response arrives,
@@ -157,6 +204,9 @@ func (b *Browser) shutdown() error {
 	if b.conn != nil {
 		_ = b.conn.CloseNow()
 	}
+	if b.keepProfile {
+		return nil
+	}
 	return removeProfile(b.profileDir)
 }
 
@@ -168,7 +218,7 @@ func (b *Browser) waitForDevTools(ctx context.Context) (string, error) {
 	poll := time.NewTicker(100 * time.Millisecond)
 	defer poll.Stop()
 
-	portFile := filepath.Join(b.profileDir, "DevToolsActivePort")
+	portFile := filepath.Join(b.profileDir, devToolsPortFile)
 	for {
 		select {
 		case address := <-b.stderr.address:

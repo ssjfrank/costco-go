@@ -498,7 +498,8 @@ func TestDownloadHistory_StopsWhenSignInIsLostInALaterWindow(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrNotAuthenticated, "a lost sign-in must surface so the caller can log in again")
 	assert.Nil(t, history)
-	assert.Equal(t, 4, api.requestCount, "a rejected sign-in is not retried and does not continue to later windows")
+	assert.Equal(t, 5, api.requestCount,
+		"the rejected request is followed by one refresh, also rejected; nothing is retried and no later window is tried")
 }
 
 func TestDownloadHistory_ResumesFromStore(t *testing.T) {
@@ -550,6 +551,126 @@ func TestDownloadHistory_ForceRefetchIgnoresStoredReceipts(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 6, api.detailCallCount())
+}
+
+func storedItemCount(t *testing.T, store *FileStore, barcode string) int {
+	t.Helper()
+	stored, err := store.LoadReceipt(barcode)
+	require.NoError(t, err)
+	return len(stored.ItemArray)
+}
+
+func TestDownloadHistory_RetriesReceiptsWhoseDetailFailedEarlier(t *testing.T) {
+	api := newFakeCostcoAPI()
+	api.failDetailFor["BC2023"] = true
+	client := newHistoryTestClient(t, api.start(t).URL)
+
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	options := HistoryOptions{
+		Since:      mustDate(t, "2022-01-01"),
+		Until:      mustDate(t, "2024-12-31"),
+		WindowDays: 365,
+		Store:      store,
+		MaxRetries: -1,
+	}
+
+	first, err := client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+	require.Len(t, first.Warnings, 1)
+
+	api.mu.Lock()
+	api.failDetailFor = map[string]bool{}
+	api.mu.Unlock()
+	callsBefore := api.detailCallCount()
+
+	second, err := client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, api.detailCallCount()-callsBefore, "only the receipt that failed is fetched again")
+	assert.Empty(t, second.Warnings)
+	assert.Equal(t, 3, second.ItemCount())
+	assert.Equal(t, 1, storedItemCount(t, store, "BC2023"), "the saved file now holds the line items")
+}
+
+func TestDownloadHistory_FetchesLineItemsAfterARunThatSkippedThem(t *testing.T) {
+	api := newFakeCostcoAPI()
+	client := newHistoryTestClient(t, api.start(t).URL)
+
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	options := HistoryOptions{
+		Since:              mustDate(t, "2022-01-01"),
+		Until:              mustDate(t, "2024-12-31"),
+		WindowDays:         365,
+		Store:              store,
+		SkipReceiptDetails: true,
+	}
+
+	_, err = client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+	require.Zero(t, api.detailCallCount())
+
+	options.SkipReceiptDetails = false
+	full, err := client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, api.detailCallCount())
+	assert.Equal(t, 3, full.ItemCount())
+}
+
+func TestDownloadHistory_SkippingLineItemsKeepsThoseAlreadySaved(t *testing.T) {
+	api := newFakeCostcoAPI()
+	client := newHistoryTestClient(t, api.start(t).URL)
+
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	options := HistoryOptions{
+		Since:      mustDate(t, "2022-01-01"),
+		Until:      mustDate(t, "2024-12-31"),
+		WindowDays: 365,
+		Store:      store,
+	}
+
+	_, err = client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+
+	options.SkipReceiptDetails = true
+	options.Force = true
+	quick, err := client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, quick.ItemCount(), "a summary must not replace a receipt saved with its line items")
+	assert.Equal(t, 1, storedItemCount(t, store, "BC2024"))
+}
+
+func TestDownloadHistory_FailedRefetchKeepsTheSavedLineItems(t *testing.T) {
+	api := newFakeCostcoAPI()
+	client := newHistoryTestClient(t, api.start(t).URL)
+
+	store, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	options := HistoryOptions{
+		Since:      mustDate(t, "2022-01-01"),
+		Until:      mustDate(t, "2024-12-31"),
+		WindowDays: 365,
+		Store:      store,
+		MaxRetries: -1,
+	}
+
+	_, err = client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+
+	api.mu.Lock()
+	api.failDetailFor["BC2023"] = true
+	api.mu.Unlock()
+	options.Force = true
+	forced, err := client.DownloadHistory(context.Background(), options)
+	require.NoError(t, err)
+
+	require.Len(t, forced.Warnings, 1, "the failed lookup is still reported")
+	assert.Equal(t, 3, forced.ItemCount())
+	assert.Equal(t, 1, storedItemCount(t, store, "BC2023"), "a failed -force run must not wipe line items already on disk")
 }
 
 // TestDownloadHistory_WritesCompleteOutputTree exercises the whole path a CLI user

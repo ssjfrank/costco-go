@@ -188,9 +188,10 @@ func (c *Client) refreshToken() error {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.getLogger().Error("token refresh failed", slog.Int("status_code", resp.StatusCode), slog.String("body", string(body)))
-		// A 4xx means the refresh token itself was refused (expired or revoked);
-		// anything else is an outage that a later retry may get through.
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		// A 4xx means the refresh token itself was refused (expired or revoked),
+		// except for being rate limited or timed out, which say nothing about
+		// the token. Those and everything else may succeed on a later retry.
+		if refreshTokenRefused(resp.StatusCode) {
 			return fmt.Errorf("%w: token refresh rejected with status %d: %s. Run 'costco-cli -cmd login' to sign in again",
 				ErrNotAuthenticated, resp.StatusCode, string(body))
 		}
@@ -201,6 +202,23 @@ func (c *Client) refreshToken() error {
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		c.getLogger().Error("failed to decode refresh response", slog.String("error", err.Error()))
 		return fmt.Errorf("decoding refresh response: %w", err)
+	}
+
+	if tokenResp.IDToken == "" {
+		c.getLogger().Error("refresh response had no id_token")
+		return errors.New("token refresh response did not include an id_token")
+	}
+
+	// A refresh response is not required to carry a new refresh token. Without
+	// one, the token just used stays in use, with the expiry it already had,
+	// rather than being replaced by nothing.
+	refreshTokenExpiresAt := time.Now().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second)
+	if tokenResp.RefreshToken == "" {
+		tokenResp.RefreshToken = refreshToken
+		refreshTokenExpiresAt = time.Time{}
+		if previous, err := LoadTokens(); err == nil && previous != nil {
+			refreshTokenExpiresAt = previous.RefreshTokenExpiresAt
+		}
 	}
 
 	c.mu.Lock()
@@ -215,7 +233,7 @@ func (c *Client) refreshToken() error {
 		IDToken:               tokenResp.IDToken,
 		RefreshToken:          tokenResp.RefreshToken,
 		TokenExpiry:           c.tokenExpiry,
-		RefreshTokenExpiresAt: time.Now().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second),
+		RefreshTokenExpiresAt: refreshTokenExpiresAt,
 	}
 	c.getLogger().Debug("saving refreshed tokens to disk")
 	if err := SaveTokens(storedTokens); err != nil {
@@ -225,6 +243,15 @@ func (c *Client) refreshToken() error {
 	}
 
 	return nil
+}
+
+// refreshTokenRefused reports whether a token endpoint status means the refresh
+// token is no longer accepted, as opposed to the request not getting through.
+func refreshTokenRefused(status int) bool {
+	if status == http.StatusTooManyRequests || status == http.StatusRequestTimeout {
+		return false
+	}
+	return status >= 400 && status < 500
 }
 
 func (c *Client) executeGraphQL(ctx context.Context, query string, variables map[string]interface{}, result interface{}) error {
@@ -243,10 +270,69 @@ func (c *Client) executeGraphQL(ctx context.Context, query string, variables map
 		return fmt.Errorf("marshaling request: %w", err)
 	}
 
+	resp, err := c.postGraphQL(ctx, body)
+	if err != nil {
+		return err
+	}
+
+	// Costco can refuse an ID token this client still considers valid, for
+	// example when the local clock is behind. Whether the sign-in is really
+	// gone is for the refresh token to say, so it is asked once.
+	if signInRefused(resp.StatusCode) && c.hasRefreshToken() {
+		resp.Body.Close()
+		c.getLogger().Info("id token refused, refreshing once", slog.Int("status_code", resp.StatusCode))
+		if err = c.refreshToken(); err != nil {
+			return fmt.Errorf("token refresh failed: %w", err)
+		}
+		if resp, err = c.postGraphQL(ctx, body); err != nil {
+			return err
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		c.getLogger().Error("graphql request failed", slog.Int("status_code", resp.StatusCode))
+		if signInRefused(resp.StatusCode) {
+			return fmt.Errorf("%w: request rejected with status %d", ErrNotAuthenticated, resp.StatusCode)
+		}
+		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var graphQLResp GraphQLResponse
+	graphQLResp.Data = result
+
+	if err := json.NewDecoder(resp.Body).Decode(&graphQLResp); err != nil {
+		c.getLogger().Debug("failed to decode graphql response", slog.String("error", err.Error()))
+		return fmt.Errorf("decoding response: %w", err)
+	}
+
+	if len(graphQLResp.Errors) > 0 {
+		c.getLogger().Warn("graphql errors in response", slog.Int("error_count", len(graphQLResp.Errors)))
+		return fmt.Errorf("GraphQL errors: %v", graphQLResp.Errors)
+	}
+
+	return nil
+}
+
+// signInRefused reports whether an API status means the ID token was not accepted.
+func signInRefused(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
+}
+
+func (c *Client) hasRefreshToken() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.token != nil && c.token.RefreshToken != ""
+}
+
+// postGraphQL sends one GraphQL request with the current ID token. The caller
+// closes the response body.
+func (c *Client) postGraphQL(ctx context.Context, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", GraphQLEndpoint, bytes.NewReader(body))
 	if err != nil {
 		c.getLogger().Error("failed to create graphql request", slog.String("error", err.Error()))
-		return fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request: %w", err)
 	}
 
 	c.mu.RLock()
@@ -279,35 +365,10 @@ func (c *Client) executeGraphQL(ctx context.Context, query string, variables map
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.getLogger().Error("graphql request failed", slog.String("error", err.Error()))
-		return fmt.Errorf("executing request: %w", err)
+		return nil, fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
-
 	c.getLogger().Debug("graphql response received", slog.Int("status_code", resp.StatusCode))
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		c.getLogger().Error("graphql request failed", slog.Int("status_code", resp.StatusCode))
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return fmt.Errorf("%w: request rejected with status %d", ErrNotAuthenticated, resp.StatusCode)
-		}
-		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var graphQLResp GraphQLResponse
-	graphQLResp.Data = result
-
-	if err := json.NewDecoder(resp.Body).Decode(&graphQLResp); err != nil {
-		c.getLogger().Debug("failed to decode graphql response", slog.String("error", err.Error()))
-		return fmt.Errorf("decoding response: %w", err)
-	}
-
-	if len(graphQLResp.Errors) > 0 {
-		c.getLogger().Warn("graphql errors in response", slog.Int("error_count", len(graphQLResp.Errors)))
-		return fmt.Errorf("GraphQL errors: %v", graphQLResp.Errors)
-	}
-
-	return nil
+	return resp, nil
 }
 
 // GetOnlineOrders retrieves online orders from Costco.com within the specified date range.

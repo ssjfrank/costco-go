@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-23
+
+Signing in no longer needs the browser console, and a re-run can no longer
+leave receipts without line items or shrink the index files.
+
+### Added
+- **`-console-login`**: Sign in only with the console command in your own browser; never open a window.
+- **`-temp-profile`**: Give the sign-in window a throwaway profile that is deleted when the window closes, so no Costco cookies are kept on disk.
+- **Binaries from every CI run**: The `Binaries` job builds Windows, Linux and macOS executables with `scripts/build-release.sh` on every pull request and push to `main`, and attaches each to the run as a download.
+- **Versioned file names**: Every built file carries the version, for example `costco-cli-1.1.0-windows-amd64.exe`, `costco-cli-1.1.0-linux-amd64` and `costco-cli-1.1.0-SHA256SUMS.txt` (previously `costco-cli-windows-amd64.exe` and `SHA256SUMS`). The release workflow refuses a tag that does not match the `Version` constant. The macOS download command in the README looks up the latest version first, so it keeps working without edits. The `Build` jobs then run the Windows, Linux (x64 and ARM64) and Apple Silicon binaries on matching machines. CI can also be started by hand (`workflow_dispatch`).
+- **`BrowserLoginOptions.ProfileDir`** and **`BrowserProfileDir()`**: Keep the sign-in window's profile between sign-ins, and the folder the CLI keeps it in (`~/.costco/browser-profile`). `costco-cli -cmd info` shows whether that folder exists.
+
+### Changed
+- **`costco-cli` opens a sign-in window by default.** When a sign-in is needed it starts Chrome, Edge, Chromium or Brave on Costco's sign-in page and closes the window once Costco has issued tokens; nothing has to be pasted. The console command is now the fallback: it is shown when no window can open (no supported browser, no display) or when the window fails. A sign-in block already in the clipboard is still used first, without opening a window. `-browser-login` now means "the window only, no fallback".
+- **The sign-in window keeps its profile** in `~/.costco/browser-profile`, so Costco's cookies are still there the next time it opens and Costco may sign you in without asking. Whether it does is up to Costco; this has not been tried with a real account. Passwords and passkeys saved only in your everyday browser profile are not available in this one.
+- **`manifest.json`, `orders.json` and `receipts.json` cover the whole archive.** `FileStore.WriteHistory` rebuilds them from every file in `orders/` and `receipts/`, and the manifest's date range only ever widens. Before, a narrower re-run such as `-since 2026-01-01` rewrote them with just that run's records. Files in those folders that cannot be read are listed in the manifest's warnings.
+- **CI pins golangci-lint to v1.64.8**, the last release that reads the v1 `.golangci.yml`, and the lint findings it reported (one `exitAfterDefer`, eight shadowed `err` variables) are fixed, so the `Lint` job passes again.
+- **`costco-cli` waits between retries** of a failed API call: 1s, 2s, then 4s. It used to retry immediately.
+
+### Fixed
+- **Receipts saved without line items are completed on the next run.** A receipt whose detail lookup failed, or one saved by a `-no-items` run, was stored as a summary and then skipped forever as "already saved". Resuming now reuses a stored receipt only when it has its detail, and a failed lookup never replaces a complete stored receipt with a summary. Archives written by 1.0.0 are repaired by simply running again.
+- **A rate-limited token refresh is no longer reported as a lost sign-in.** HTTP 429 and 408 from the token endpoint are ordinary errors now; before, they produced `ErrNotAuthenticated` and asked the user to sign in again for nothing.
+- **A token refresh that returns no new refresh token keeps the current one** and its expiry. Before, the saved refresh token was overwritten with an empty one, so the next refresh failed. A refresh response without an `id_token` is now an error instead of being saved.
+- **A 401 or 403 from the API triggers one token refresh and one more try** before `ErrNotAuthenticated` is returned, so an ID token Costco revoked early no longer forces a new sign-in while the refresh token still works.
+- **A kept profile cannot leave the sign-in window waiting.** The start page's `localStorage` is cleared before it loads, because a page that still held tokens from an earlier sign-in would reuse them and never request the ones the tool waits for. Cookies are left alone.
+
+### Security
+- The kept profile holds Costco's cookies and stays on your computer. The folder is created user-only (`0700`), the tool never copies or sends its contents, and the window is started with `--disable-sync`, `--disable-breakpad`, `--metrics-recording-only` and `--disable-background-networking`, so the browser does not sync the profile to an account or upload crash reports or usage statistics from it. The browser still downloads its own components into the folder. Anyone who can read the folder can act as you on costco.com while the cookies last; delete it, or pass `-temp-profile`, to keep nothing.
+
+[1.1.0]: https://github.com/eshaffer321/costco-go/compare/v1.0.0...v1.1.0
+
 ## [1.0.0] - 2026-09-23
 
 The library and CLI are now focused on one job: downloading a complete Costco

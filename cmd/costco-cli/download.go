@@ -15,6 +15,10 @@ import (
 // for longer, so asking for a decade simply returns everything that still exists.
 const defaultHistoryYears = 10
 
+// retryBackoff is the wait before the first retry of a failed call; it doubles
+// for each retry after that.
+const retryBackoff = time.Second
+
 // errIncompleteHistory reports that the download finished but some records were
 // missing, so the process should exit non-zero even though data was written.
 var errIncompleteHistory = errors.New("history is incomplete")
@@ -42,6 +46,7 @@ func (c downloadConfig) historyOptions(now time.Time) (costco.HistoryOptions, er
 		PageSize:           c.PageSize,
 		RequestDelay:       c.Delay,
 		MaxRetries:         c.Retries,
+		RetryDelay:         retryBackoff,
 		SkipReceiptDetails: c.SkipDetails,
 		Force:              c.Force,
 	}
@@ -90,7 +95,7 @@ func runDownload(ctx context.Context, cfg downloadConfig, out io.Writer) error {
 			return notSignedInError()
 		}
 		fmt.Fprintln(out, "You are not signed in to Costco yet, or your last sign-in has expired.")
-		if err := signIn(ctx, cfg.SignIn, out); err != nil {
+		if err = signIn(ctx, cfg.SignIn, out); err != nil {
 			return err
 		}
 	}

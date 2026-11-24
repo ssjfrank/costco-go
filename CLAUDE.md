@@ -14,10 +14,11 @@ Costco's OAuth2 endpoint requires the Authorization Code flow with PKCE, which n
 
 A local redirect listener is not an option either: Costco's client only accepts its own registered `https://www.costco.com/...` redirect URIs. Two ways in exist instead:
 
-- **Console command (default)** — `pkg/costco/console_signin.go`. The user signs in in their own browser, opens Orders & Returns, and runs `ConsoleSnippet()` in DevTools. It reads the MSAL.js 2.x cache entries (`credentialType` `IdToken`/`RefreshToken`, `clientId` = `ClientID`) from `sessionStorage`/`localStorage`, refreshes them against `TokenEndpoint`, and copies a `-----BEGIN COSTCO SIGN-IN-----` block of 64-character base64 lines. The short lines exist because macOS terminals truncate a pasted line at 1024 bytes. The CLI reads the block from the clipboard or a paste (`cmd/costco-cli/console_signin.go`). The README and the Chinese guide embed the snippet verbatim; `TestDocsShowTheCurrentConsoleSnippet` fails if they drift, so regenerate them with `costco-cli -cmd snippet` after changing it.
-- **`-browser-login`** — `LoginWithBrowser` (`pkg/costco/browser_login.go`, driving `internal/browser`) launches the user's Chrome/Edge/Chromium/Brave with a throwaway profile and lets the user sign in by hand, then reads the token response costco.com itself receives over the DevTools protocol.
+- **Sign-in window (default)** — `LoginWithBrowser` (`pkg/costco/browser_login.go`, driving `internal/browser`) launches the user's Chrome/Edge/Chromium/Brave and lets the user sign in by hand, then reads the token response costco.com itself receives over the DevTools protocol. The CLI gives the window a profile it keeps, `~/.costco/browser-profile` (`BrowserProfileDir()`, `BrowserLoginOptions.ProfileDir`), so Costco's cookies can sign the user in next time; `-temp-profile` uses a throwaway profile instead. The user's condition for keeping that profile is that it stays on their machine: it is created `0700`, nothing may copy or send its contents, and `launchArgs` passes `--disable-sync`, `--disable-breakpad`, `--metrics-recording-only` and `--disable-background-networking` (`TestLaunchArgs_KeepTheProfileOnThisComputer`). Before the start page loads, its `localStorage` is cleared (`Storage.clearDataForOrigin` in `internal/browser/capture.go`): a page that kept tokens there from last time would reuse them and never make the token request the capture waits for.
+- **Console command (fallback)** — `pkg/costco/console_signin.go`. Used when no window can open (no browser, no display), when the window fails, or with `-console-login`; a sign-in block already in the clipboard is used before any window opens (`obtainSignIn` in `cmd/costco-cli/signin.go`). The user signs in in their own browser, opens Orders & Returns, and runs `ConsoleSnippet()` in DevTools. It reads the MSAL.js 2.x cache entries (`credentialType` `IdToken`/`RefreshToken`, `clientId` = `ClientID`) from `sessionStorage`/`localStorage`, refreshes them against `TokenEndpoint`, and copies a `-----BEGIN COSTCO SIGN-IN-----` block of 64-character base64 lines. The short lines exist because macOS terminals truncate a pasted line at 1024 bytes. The CLI reads the block from the clipboard or a paste (`cmd/costco-cli/console_signin.go`). The README and the Chinese guide embed the snippet verbatim; `TestDocsShowTheCurrentConsoleSnippet` fails if they drift, so regenerate them with `costco-cli -cmd snippet` after changing it.
+- **`-browser-login`** restricts sign-in to the window, with no console fallback.
 
-Facts both depend on, verified against the live site in September 2026:
+Facts both depend on, verified against the live site in September 2026 (the kept profile has not been tried with a real account: whether Costco's cookies outlast a browser restart, and so whether the window can sign in unattended, is unknown):
 
 - The home page's **Sign In** link runs a server-side flow (client `4900eb1f…`, `response_mode=form_post` to `/OAuthLogonCmd`). No token response ever reaches the browser, so capturing from there waits forever.
 - The **order history** (`/myaccount/#/app/<WCSClientID>/ordersandpurchases`) redirects signed-out users to the same sign-in page and returns them to the MSAL account app. That app then POSTs to `signin.costco.com/.../oauth2/v2.0/token` and receives the `id_token` + `refresh_token` this library uses. `SignInStartURL` points there for that reason.
@@ -34,7 +35,7 @@ costco-go/
 ├── cmd/costco-cli/           # CLI application
 │   ├── main.go               # Flag parsing and command dispatch
 │   ├── download.go           # The download command
-│   ├── signin.go             # Sign-in dispatch and sign-in retry
+│   ├── signin.go             # Sign-in dispatch (window, then console) and retry
 │   ├── console_signin.go     # Console-command sign-in: clipboard or paste
 │   ├── clipboard.go          # Reading the system clipboard
 │   ├── setup.go              # Email/warehouse configuration
@@ -46,7 +47,7 @@ costco-go/
 │   ├── browser_login.go      # LoginWithBrowser: Costco sign-in via browser window
 │   ├── history.go            # Full-history download, date windowing, retries
 │   ├── store.go              # FileStore: on-disk JSON output and resume
-│   ├── config.go             # Config and token persistence in ~/.costco
+│   ├── config.go             # Config, tokens and the window profile in ~/.costco
 │   ├── orders.go             # Online order types
 │   ├── receipts.go           # Receipt types and discount helpers
 │   ├── queries.go            # GraphQL query documents
@@ -136,7 +137,7 @@ git tag vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The tag push triggers `.github/workflows/release.yml`, which tests, builds every platform with `scripts/build-release.sh` and publishes the GitHub Release. macOS users download from `releases/latest/download/costco-cli-darwin-<arch>`, which skips pre-releases, so only a plain `vX.Y.Z` tag updates what they get.
+The tag push triggers `.github/workflows/release.yml`, which tests, builds every platform with `scripts/build-release.sh` and publishes the GitHub Release. Every file it builds carries the version in its name (`costco-cli-X.Y.Z-windows-amd64.exe`, `costco-cli-X.Y.Z-SHA256SUMS.txt`), and the workflow refuses a tag that is not `v` + the `Version` constant, so bump the version before tagging. The README's macOS `curl` looks the version up from `releases/latest`, which skips pre-releases, so only a plain `vX.Y.Z` tag updates what users get; it needs no edit per release. CI uploads the same versioned files as run artifacts.
 
 ### Versioning Checklist
 
