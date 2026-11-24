@@ -1,6 +1,6 @@
 # Costco Go Client
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/eshaffer321/costco-go/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/eshaffer321/costco-go/releases/tag/v1.1.0)
 
 Download your complete Costco purchase history — every online order and every
 warehouse receipt, down to the individual line items — into local JSON files.
@@ -25,22 +25,22 @@ chmod +x costco-cli
    Linux and Windows builds are on the
    [Releases](https://github.com/ssjfrank/costco-go/releases) page, or build from
    source with Go 1.24+: `go build -o costco-cli ./cmd/costco-cli`.
-2. In your usual browser, sign in at [costco.com](https://www.costco.com) and
-   open **Orders & Returns**.
-3. Press **F12** (Mac: **Cmd+Option+J**), open the **Console**, paste the
-   command from [Signing in](#signing-in) and press Enter. It copies your
-   sign-in to the clipboard.
-4. Run it:
+2. Run it:
 
 ```bash
 ./costco-cli
 ```
 
-It picks the sign-in up from the clipboard and starts downloading:
+3. A browser window opens on Costco's sign-in page. Sign in the way you always
+   do. The window closes by itself and the download starts:
 
 ```
 You are not signed in to Costco yet, or your last sign-in has expired.
-Found a Costco sign-in in your clipboard.
+A browser window has opened on Costco's sign-in page. Sign in there with any method you normally use;
+the window closes by itself once your order history starts loading.
+If Costco still remembers you in that window, it closes without you doing anything.
+Its cookies are kept on this computer only, in /Users/you/.costco/browser-profile;
+delete that folder to remove them.
 ✓ Signed in. You won't need to sign in again until about 2026-12-22.
 
 Downloading Costco history from 2016-09-24 to 2026-09-24 into costco-history
@@ -60,10 +60,12 @@ Downloaded 214 online orders and 388 warehouse receipts (7431 receipt line items
 ```
 
 It reaches back ten years and writes everything it finds into
-`./costco-history`. Later runs reuse the sign-in for about 90 days. When it
-runs out, `costco-cli` shows the steps and the command again and waits for you
-to press Enter. Running `costco-cli` first and doing the browser steps while it
-waits works just as well.
+`./costco-history`. Later runs reuse the sign-in for about 90 days and open no
+window at all. When it runs out, the window opens again.
+
+The window needs Chrome, Edge, Chromium or Brave. Without one of them, on a
+machine with no display, or if the window does not work, `costco-cli` shows a
+command to run in your own browser instead; see [Signing in](#signing-in).
 
 ## What you get
 
@@ -83,7 +85,7 @@ records that could not be downloaded, and a one-line entry per file:
 
 ```json
 {
-  "library_version": "1.0.0",
+  "library_version": "1.1.0",
   "generated_at": "2026-08-06T09:14:22Z",
   "since": "2016-08-06",
   "until": "2026-08-06",
@@ -111,15 +113,19 @@ savings and the membership number.
 ## Resuming and updating
 
 Receipts are written to disk the moment they arrive, and every run skips
-receipts that are already saved. That means:
+receipts that are already saved with their line items. That means:
 
 - **An interrupted download costs nothing.** Press Ctrl-C, re-run the same
   command, and it picks up only what is missing.
 - **Keeping the archive current is cheap.** Re-running later fetches only new
   receipts. Add `-since` to narrow the scan: `./costco-cli -since 2026-01-01`.
-- **Individual failures do not sink the run.** If one receipt is unavailable,
-  it is listed at the end and the command exits non-zero; re-running retries
-  just those. Use `-force` to re-download records that are already saved.
+  `manifest.json`, `orders.json` and `receipts.json` always cover everything in
+  the directory, not just the dates of the latest run.
+- **Individual failures do not sink the run.** If one receipt's line items are
+  unavailable, its summary is saved, it is listed at the end and the command
+  exits non-zero; re-running retries just those. The same goes for receipts
+  saved by a `-no-items` run: a later run without the flag fills in their line
+  items. Use `-force` to re-download records that are already complete.
 
 ## CLI flags
 
@@ -136,8 +142,10 @@ receipts that are already saved. That means:
 | `-no-items` | off | Skip per-receipt line item lookups (much faster, less detail) |
 | `-force` | off | Re-download receipts that are already saved |
 | `-quiet` | off | Print only the final summary |
-| `-browser-login` | off | Sign in through a browser window the tool opens, instead of the console command |
-| `-browser` | auto-detect | Chrome, Edge, Chromium or Brave executable for `-browser-login` |
+| `-browser-login` | off | Sign in only through the window the tool opens; never fall back to the console command |
+| `-console-login` | off | Sign in only with the console command in your own browser; never open a window |
+| `-temp-profile` | off | Give the sign-in window a throwaway profile, so no Costco cookies are kept on disk |
+| `-browser` | auto-detect | Chrome, Edge, Chromium or Brave executable for the sign-in window |
 | `-non-interactive` | off | Never ask for a sign-in; fail instead (for unattended runs) |
 
 If a wide date range gets rejected by Costco's API, narrow the window:
@@ -145,8 +153,36 @@ If a wide date range gets rejected by Costco's API, narrow the window:
 
 ## Signing in
 
-Costco's sign-in has to happen in a browser, so you do it in yours, the way you
-always do (password, passkey, security key or passcode). Then:
+Costco's sign-in has to happen in a browser. `costco-cli` gets you there in one
+of two ways.
+
+### The sign-in window (default)
+
+`costco-cli` starts Chrome, Edge, Chromium or Brave with a profile of its own,
+separate from your everyday one, and opens Costco's order history there, which
+sends you to the sign-in page. Sign in with whatever you normally use. When
+Costco hands the page its tokens, `costco-cli` reads that one response over the
+DevTools protocol and closes the window.
+
+The profile is kept in `~/.costco/browser-profile`, so the window still has
+Costco's cookies the next time it opens. If Costco still accepts them, the
+window signs in and closes without you typing anything; if not, you sign in
+again. How long Costco honours those cookies is up to Costco.
+
+- Passwords and passkeys saved only in your everyday browser profile are not
+  available in this one. OS-level passkeys (iCloud Keychain, Windows Hello),
+  security keys and phone sign-in work.
+- `-temp-profile` uses a throwaway profile that is deleted when the window
+  closes, so nothing is remembered and you sign in by hand every time.
+- Delete `~/.costco/browser-profile` at any time to remove the cookies.
+  `costco-cli` recreates the folder when it next needs it.
+
+### The console command (fallback)
+
+Used when no window can be opened (no supported browser, no display), when the
+window fails, or when you pass `-console-login`. You sign in in your own
+browser, the way you always do (password, passkey, security key or passcode).
+Then:
 
 1. Open **Orders & Returns**. That page holds the sign-in this tool needs.
 2. Press **F12** (Mac: **Cmd+Option+J**; Safari: enable *Show features for web
@@ -170,8 +206,11 @@ can paste it into the terminal. The block is split into short lines because
 macOS terminals cut a pasted line off at 1024 characters, and a token is
 several KB. `./costco-cli -cmd snippet` prints the command whenever you need it.
 
-After that, tokens refresh automatically for about 90 days. When Costco stops
-accepting them, the next run shows the steps again and waits; a download
+If a sign-in block is already in the clipboard when `costco-cli` needs one, it
+is used straight away and no window opens.
+
+Either way, tokens then refresh automatically for about 90 days. When Costco
+stops accepting them, the next run asks you to sign in again; a download
 interrupted that way resumes where it stopped. `./costco-cli -cmd login` signs
 in without downloading anything.
 
@@ -182,15 +221,8 @@ clipboard. You can watch its single request in the DevTools Network tab. Once
 `costco-cli` has imported the sign-in, copy something else to clear it from the
 clipboard.
 
-Other ways in:
+### Other ways in
 
-- **`./costco-cli -browser-login`** starts Chrome, Edge, Chromium or Brave with
-  a fresh temporary profile, opens Costco's order history there (which sends you
-  to the sign-in page), and captures the token response over the DevTools
-  protocol when you land back. The window then closes and the profile is
-  deleted. Passwords and passkeys saved only in your usual browser profile are
-  not available in the temporary one; OS-level passkeys (iCloud Keychain,
-  Windows Hello), security keys and phone sign-in work.
 - **`./costco-cli -cmd import-token < token.json`** imports a saved block, or
   the raw JSON response of the `oauth2/v2.0/token` request copied from the
   DevTools Network tab.
@@ -202,16 +234,28 @@ whether they are still valid.
 
 ### Where your data goes
 
-Nowhere but your own machine and Costco. The only hosts contacted are
-`signin.costco.com` (token refresh) and `ecom-api.costco.com` (the GraphQL API),
-plus whatever costco.com loads in a `-browser-login` window; there is no
-telemetry or third-party reporting. The tool never sees your password, passkey
-or security key, only OAuth tokens Costco issued. Tokens are stored in
-`~/.costco/tokens.json` and downloaded history is written with user-only
-permissions (`0600` files, `0700` directories), because receipts contain your
-membership number, warehouse addresses and payment descriptions.
+Nowhere but your own machine and Costco. The only hosts `costco-cli` itself
+contacts are `signin.costco.com` (token refresh) and `ecom-api.costco.com` (the
+GraphQL API); there is no telemetry or third-party reporting. The tool never
+sees your password, passkey or security key, only OAuth tokens Costco issued.
+Tokens are stored in `~/.costco/tokens.json` and downloaded history is written
+with user-only permissions (`0600` files, `0700` directories), because receipts
+contain your membership number, warehouse addresses and payment descriptions.
 
-The `-browser-login` window is started with
+The sign-in window is a real browser, so it loads whatever costco.com loads.
+Its profile, `~/.costco/browser-profile`, holds Costco's cookies and stays on
+your computer: the folder is readable by your user only (`0700`), `costco-cli`
+never copies or sends its contents anywhere, and the window is started with
+`--disable-sync`, `--disable-breakpad`, `--metrics-recording-only` and
+`--disable-background-networking`, so the browser does not sync the profile to
+a Google or Microsoft account and does not upload crash reports or usage
+statistics from it. The browser still downloads its own components into the
+folder (certificate revocation lists and the like), which is why it grows to
+roughly 150 MB. Anyone who can read that folder can act as you on costco.com
+for as long as the cookies last, exactly as with your everyday browser profile;
+pass `-temp-profile` if you would rather keep nothing.
+
+The window is also started with
 `--disable-blink-features=AutomationControlled`. Chrome otherwise marks any
 window with a DevTools connection as automated (`navigator.webdriver`), and
 sign-in pages may refuse such windows even though a person is signing in.
@@ -236,7 +280,9 @@ func main() {
 
 	// Only needed when no usable tokens are saved yet. Pipe in what the console
 	// command (costco.ConsoleSnippet()) printed; costco.LoginWithBrowser returns
-	// the same TokenResponse by opening a sign-in window instead.
+	// the same TokenResponse by opening a sign-in window instead. Its
+	// BrowserLoginOptions.ProfileDir keeps the window's profile between
+	// sign-ins; costco.BrowserProfileDir() is the folder the CLI uses.
 	if tokens, _ := costco.LoadTokens(); tokens == nil || time.Now().After(tokens.RefreshTokenExpiresAt) {
 		signInBlock, err := io.ReadAll(os.Stdin)
 		if err != nil {

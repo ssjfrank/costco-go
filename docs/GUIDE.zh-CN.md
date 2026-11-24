@@ -2,12 +2,12 @@
 
 本工具会把你 Costco 账户里的所有网上订单和所有仓库店收据（包括每一行商品明细）下载到本地 JSON 文件。
 
-整个过程：**在你平时用的浏览器里登录 Costco → 按 F12，在 Console 里粘贴一条命令 → 回到终端按回车。** 其余的全部自动完成。登录一次大约可以用 90 天。
+整个过程：**运行 `./costco-cli` → 在弹出的浏览器窗口里登录 Costco → 窗口自动关闭，开始下载。** 其余的全部自动完成。登录一次大约可以用 90 天。
 
 ## 开始之前
 
 - 一台 Mac（Apple 芯片 M1 及以后，或 Intel 芯片都可以）。
-- 任意一个带开发者工具的浏览器：Chrome、Edge、Firefox、Safari 都可以。
+- 电脑上装有 Chrome、Edge、Chromium 或 Brave 其中之一（用来弹出登录窗口）。都没有也可以，改用文末的[备用方式](#备用方式在自己的浏览器里用-console-命令登录)，Firefox、Safari 都行。
 
 > 下文以 Mac 为准，命令都在"终端"（Terminal）里运行：按 **Cmd + 空格**，输入 `终端` 或 `Terminal` 回车即可打开。
 
@@ -23,7 +23,7 @@ chmod +x costco-cli
 ./costco-cli -version
 ```
 
-看到类似 `costco-cli 1.0.0 (commit ...)` 就说明下载成功。程序和下载的数据都放在你个人目录下的 `costco` 文件夹里（`~/costco`）。
+看到类似 `costco-cli 1.1.0 (commit ...)` 就说明下载成功。程序和下载的数据都放在你个人目录下的 `costco` 文件夹里（`~/costco`）。
 
 - `uname -m` 会自动判断你的 Mac 是 Apple 芯片（`arm64`）还是 Intel 芯片（`amd64`），下载对应的版本。
 - 如果 `curl` 提示 `404`，说明还没有发布正式的 Release。把第三行换成临时下载地址再运行一次：
@@ -45,57 +45,44 @@ chmod +x costco-cli
 >
 > 这个分支合并进 `main` 之后，就不需要 `git checkout` 那一行了。
 
-## 第 2 步：在浏览器里登录 Costco
+## 第 2 步：运行软件，在弹出的窗口里登录
 
-1. 用你平时的浏览器打开 [costco.com](https://www.costco.com) 并登录。密码、通行密钥、安全密钥、验证码都可以，用你平时的方式就行。
-2. 点页面顶部的 **Orders & Returns（订单与退货）**，等订单列表出现。
-
-> 一定要打开 Orders & Returns 这个页面。登录令牌是这个页面加载时才拿到的，在首页运行命令会提示找不到。
-
-## 第 3 步：按 F12，在 Console 里运行命令
-
-1. 在订单页按 **F12**（Mac 上按 **Cmd + Option + J**；Safari 需要先在"设置 → 高级"里勾选"显示网页开发者功能"，再按 **Cmd + Option + C**），切换到 **Console（控制台）** 标签。
-2. 第一次往 Console 里粘贴东西时，浏览器会出于安全考虑拦一下，提示你先手动输入一段文字（英文界面是 `allow pasting`，中文界面以浏览器显示的为准）。照着输入并按回车，再粘贴即可。
-3. 复制下面这一整行命令，粘贴到 Console 里，按回车：
-
-```js
-(async () => { const CLIENT = "a3a5186b-7c89-4b4c-93a8-dd604e930757", TOKEN_URL = "https://signin.costco.com/e0714dd4-784d-46d6-a278-3e29553483eb/b2c_1a_sso_wcs_signup_signin_209/oauth2/v2.0/token"; const toClipboard = typeof copy === "function" ? copy : null; const found = {}; let others = 0; for (const store of [sessionStorage, localStorage]) { for (let i = 0; i < store.length; i++) { let entry; try { entry = JSON.parse(store.getItem(store.key(i))); } catch (e) { continue; } if (!entry || !entry.secret || !/^(IdToken|RefreshToken)$/.test(entry.credentialType)) continue; if (entry.clientId !== CLIENT) { others++; continue; } found[entry.credentialType] = entry.secret; } } if (!found.RefreshToken) { console.error(others ? "This page has a sign-in for a different Costco app. Open Orders & Returns and run this again." : "No Costco sign-in on this page. Sign in, open Orders & Returns, then run this again."); return; } let tokens, response; try { response = await fetch(TOKEN_URL, {method: "POST", body: new URLSearchParams({client_id: CLIENT, grant_type: "refresh_token", refresh_token: found.RefreshToken})}); const text = await response.text(); try { tokens = JSON.parse(text); } catch (e) { tokens = {}; } } catch (e) { if (!found.IdToken) { console.error("Could not reach Costco: " + e); return; } console.warn("Could not reach Costco to refresh the sign-in; using the one on this page."); tokens = {id_token: found.IdToken, refresh_token: found.RefreshToken, refresh_token_expires_in: 7776000}; } if (response && (!response.ok || !tokens.refresh_token)) { console.error("Costco refused the sign-in (" + (tokens.error_description || tokens.error || response.status) + "). Sign out, sign in again and rerun this."); return; } const block = "-----BEGIN COSTCO SIGN-IN-----\n" + btoa(unescape(encodeURIComponent(JSON.stringify(tokens)))).match(/.{1,64}/g).join("\n") + "\n-----END COSTCO SIGN-IN-----"; if (toClipboard) toClipboard(block); console.log(block + "\n\n" + (toClipboard ? "Copied to your clipboard. " : "Copy everything from BEGIN to END. ") + "Now run costco-cli."); return block; })()
-```
-
-> 这条命令也可以随时用 `./costco-cli -cmd snippet` 打印出来。
-
-Console 里会打印一段以 `-----BEGIN COSTCO SIGN-IN-----` 开头、`-----END COSTCO SIGN-IN-----` 结尾的内容，最后一行是：
-
-```
-Copied to your clipboard. Now run costco-cli.
-```
-
-说明你的登录信息**已经自动复制到剪贴板**了，不用自己去选中复制。
-
-## 第 4 步：运行软件
-
-回到终端运行：
+在终端运行：
 
 ```bash
 cd ~/costco
 ./costco-cli
 ```
 
-程序会自动从剪贴板读取刚才的登录信息：
+程序会打开一个新的浏览器窗口，停在 Costco 的登录页面，终端里显示：
 
 ```
 You are not signed in to Costco yet, or your last sign-in has expired.
-Found a Costco sign-in in your clipboard.
+A browser window has opened on Costco's sign-in page. Sign in there with any method you normally use;
+the window closes by itself once your order history starts loading.
+If Costco still remembers you in that window, it closes without you doing anything.
+Its cookies are kept on this computer only, in /Users/你的用户名/.costco/browser-profile;
+delete that folder to remove them.
+```
+
+在这个窗口里像平时一样登录（密码、验证码、安全密钥都可以）。登录成功、订单页开始加载时，窗口会**自动关闭**，终端里显示：
+
+```
 ✓ Signed in. You won't need to sign in again until about 2026-12-22.
 
 Downloading Costco history from 2016-09-24 to 2026-09-24 into costco-history
 ```
 
-然后自动开始下载。
+然后自动开始下载。你不需要按 F12，也不需要复制粘贴任何东西。
 
-> **顺序反过来也可以**：先运行 `./costco-cli`，它会显示上面的操作说明和命令，并等你操作；你在浏览器里运行完命令后，回到终端按一下**回车**就行。如果剪贴板用不了，也可以把 Console 打印的那一整段（从 BEGIN 到 END）直接粘贴到终端里。
+几点说明：
 
-## 第 5 步：等待下载完成
+- **这个窗口用的是程序专用的浏览器配置**，和你平时的浏览器是分开的，所以看不到你平时浏览器里保存的密码和通行密钥。系统级的通行密钥（iCloud 钥匙串、Windows Hello）、安全密钥、手机验证都能用。如果你的通行密钥只存在 Chrome 的密码管理器里，请用文末的[备用方式](#备用方式在自己的浏览器里用-console-命令登录)。
+- **专用配置保存在本机的 `~/.costco/browser-profile` 文件夹里**，里面有 Costco 的登录 Cookie。下次需要重新登录时，如果 Costco 还认这些 Cookie，窗口会自己登录并关闭，你什么都不用输入；如果不认了，就再登录一次。Costco 让 Cookie 保持多久由 Costco 决定。这个文件夹只留在你的电脑上，详见下面的[安全说明](#安全说明)。
+- **不想在硬盘上留 Cookie**：运行 `./costco-cli -temp-profile`，窗口改用一次性的临时配置，关闭后立即删除，每次都要手动登录。
+- **窗口打不开**（没有上面那几种浏览器、电脑没有图形界面，或者窗口出错）时，程序会自动改为显示[备用方式](#备用方式在自己的浏览器里用-console-命令登录)的操作说明。
+
+## 第 3 步：等待下载完成
 
 程序默认往回查 10 年，把找到的所有记录保存到当前目录下的 `costco-history` 文件夹，并逐段显示进度：
 
@@ -120,7 +107,7 @@ Downloaded 214 online orders and 388 warehouse receipts (7431 receipt line items
   Start here:          costco-history/manifest.json
 ```
 
-## 第 6 步：查看结果
+## 第 4 步：查看结果
 
 ```
 costco-history/
@@ -137,18 +124,20 @@ costco-history/
 
 直接再运行一次 `cd ~/costco && ./costco-cli`：
 
-- 已经下载过的收据会自动跳过，只下载新的。
-- 登录还有效就直接下载；过期了（大约 90 天）会提示你重做第 2、3 步，然后按回车继续。
+- 已经下载过、并且带商品明细的收据会自动跳过，只下载新的和上次没下全的。
+- `manifest.json`、`orders.json`、`receipts.json` 始终包含文件夹里的全部记录，不会因为这次只查了一小段日期而变少。
+- 登录还有效就直接下载，不会弹窗口；过期了（大约 90 天）会再弹出登录窗口。
 - 只想查最近的：`./costco-cli -since 2026-01-01`
 - 全部重新下载：`./costco-cli -force`
 - 只登录、不下载：`./costco-cli -cmd login`
+- 先用 `-no-items` 快速下载过（不含商品明细）也没关系：之后不带这个参数再运行一次，会把明细补齐。
 - 更新程序本身：重新运行第 1 步的下载命令即可，已下载的数据和登录状态都不受影响。
 
 ## 在 Docker 容器里运行（可选）
 
 登录信息保存在一个文件里：`~/.costco/tokens.json`。下载只需要这个文件，所以可以在 Mac 上登录一次，然后在容器里运行下载，只把这个文件挂载进去。需要先安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。
 
-1. **先在 Mac 上登录一次**，生成登录文件（按上面的第 1～4 步，或者运行 `./costco-cli -cmd login`）。登录成功后会显示文件位置：
+1. **先在 Mac 上登录一次**，生成登录文件（按上面的第 1、2 步，或者运行 `./costco-cli -cmd login`）。登录成功后会显示文件位置：
 
    ```
    ✓ Signed in. You won't need to sign in again until about 2026-12-23.
@@ -192,6 +181,9 @@ costco-history/
 
 | Console 或终端里的提示 | 解决办法 |
 | --- | --- |
+| 登录窗口里已经看到订单了，但窗口一直不关 | 关掉窗口，重新运行 `./costco-cli`；还不行就用 `./costco-cli -console-login` 走备用方式。 |
+| 终端提示 `The sign-in window did not work` | 窗口没能完成登录，程序已自动改用备用方式，按屏幕上的说明操作即可。 |
+| 想清除登录窗口记住的 Cookie | 删除 `~/.costco/browser-profile` 文件夹。下次需要时程序会重新创建。 |
 | `No Costco sign-in on this page` | 没登录，或者不在订单页。登录后打开 **Orders & Returns**，在那个页面重新运行命令。 |
 | `This page has a sign-in for a different Costco app` | 你在别的 Costco 页面上运行了命令。打开 **Orders & Returns** 再运行。 |
 | `Costco refused the sign-in` | 浏览器里的登录已经失效。在 costco.com 退出再登录，打开订单页重新运行命令。 |
@@ -205,7 +197,17 @@ costco-history/
 
 ## 安全说明
 
-**往 Console 里粘贴代码之前，一定要清楚它在做什么。** 骗子常用"把这段代码粘贴到控制台"的方式盗取账号。只粘贴来自本项目的命令（或 `./costco-cli -cmd snippet` 打印的命令）。这条命令只做三件事：
+**你的数据只在本机和 Costco 之间往来。** 程序自己只连接两个地址：`signin.costco.com`（刷新登录令牌）和 `ecom-api.costco.com`（查询订单和收据）。没有任何统计、上报或第三方服务。程序看不到你的密码、通行密钥或安全密钥，只拿到 Costco 签发的登录令牌。
+
+**登录窗口的专用配置（`~/.costco/browser-profile`）只保存在本机，不会上传：**
+
+- 文件夹权限是 `0700`，只有你自己的系统账户能读。
+- 程序不会把里面的内容复制或发送到任何地方；里面的 Cookie 只会由那个浏览器窗口发给 Costco 自己的网站，和你平时用浏览器登录 Costco 一样。
+- 窗口启动时带有 `--disable-sync`、`--disable-breakpad`、`--metrics-recording-only`、`--disable-background-networking`，也就是不登录 Google / Microsoft 账号同步、不上传崩溃报告、不上传使用统计。浏览器仍会从厂商那里**下载**它自己的组件（证书吊销列表等），所以这个文件夹会长到 150 MB 左右。
+- 能读到这个文件夹的人，在 Cookie 有效期内可以冒充你访问 costco.com，这一点和你平时浏览器的配置文件夹一样。不要把它拷给别人或放进网盘同步目录。不想保留的话，删除这个文件夹，或者一直用 `-temp-profile`。
+- 登录窗口是一个真实的浏览器，会加载 costco.com 页面上的所有内容（包括 Costco 自己使用的第三方脚本），这和你平时打开 costco.com 没有区别。
+
+**往 Console 里粘贴代码之前，一定要清楚它在做什么。**（只在使用备用方式时才需要。） 骗子常用"把这段代码粘贴到控制台"的方式盗取账号。只粘贴来自本项目的命令（或 `./costco-cli -cmd snippet` 打印的命令）。这条命令只做三件事：
 
 1. 在当前页面的浏览器存储里找到 Costco 订单页保存的登录令牌；
 2. 用它向 Costco 自己的登录服务器（`signin.costco.com`）换一个新令牌，和订单页自己做的完全一样；
@@ -216,11 +218,47 @@ costco-history/
 其他注意事项：
 
 - 剪贴板里的登录信息等同于你的 Costco 登录状态。导入后，建议随便复制一段别的文字把它覆盖掉；不要把它发给任何人。
-- 令牌保存在 `~/.costco/tokens.json`，下载的数据保存在 `~/costco/costco-history`，两者都设置为只有你自己的系统账户可以读取。如果你是在项目源代码目录里运行的，项目的 `.gitignore` 已经排除了 `costco-history/` 和 `token.json`。
+- 令牌保存在 `~/.costco/tokens.json`，登录窗口的 Cookie 保存在 `~/.costco/browser-profile`，下载的数据保存在 `~/costco/costco-history`，三者都设置为只有你自己的系统账户可以读取。如果你是在项目源代码目录里运行的，项目的 `.gitignore` 已经排除了 `costco-history/` 和 `token.json`。
 - 下载的程序可以用 Release 里的 `SHA256SUMS` 核对：`shasum -a 256 costco-cli`，结果应与 `SHA256SUMS` 里对应的那一行一致。
-- 收据里有会员号、地址和付款信息，**不要**把 `costco-history` 或 `tokens.json` 上传到网上或分享给别人。
-- 如果怀疑令牌泄露，先删除 `~/.costco/tokens.json`，再到 costco.com 退出登录并更新账户安全设置。已经发出的令牌能否立即作废由 Costco 决定，本工具无法控制；最迟大约 90 天后它会自然过期。
+- 收据里有会员号、地址和付款信息，**不要**把 `costco-history`、`tokens.json` 或 `browser-profile` 上传到网上或分享给别人。
+- 如果怀疑令牌泄露，先删除 `~/.costco/tokens.json` 和 `~/.costco/browser-profile`，再到 costco.com 退出登录并更新账户安全设置。已经发出的令牌能否立即作废由 Costco 决定，本工具无法控制；最迟大约 90 天后它会自然过期。
 
-## 附录：让程序自己打开登录窗口
+## 备用方式：在自己的浏览器里用 Console 命令登录
 
-不想用 Console 的话，可以运行 `./costco-cli -browser-login`。程序会用一个全新的临时配置打开 Chrome / Edge / Chromium / Brave，你在弹出的窗口里登录，窗口会在订单页开始加载时自动关闭。注意：这个临时配置看不到你平时浏览器里保存的密码和通行密钥，如果你的通行密钥只存在 Chrome 的密码管理器里，请用上面的 Console 方式。
+登录窗口用不了，或者你更愿意用平时的浏览器（比如通行密钥只存在里面）时用这个方式。运行 `./costco-cli -console-login` 可以直接走这条路，不弹窗口。
+
+1. 用你平时的浏览器打开 [costco.com](https://www.costco.com) 并登录，然后点页面顶部的 **Orders & Returns（订单与退货）**，等订单列表出现。
+
+   > 一定要打开 Orders & Returns 这个页面。登录令牌是这个页面加载时才拿到的，在首页运行命令会提示找不到。
+
+2. 在订单页按 **F12**（Mac 上按 **Cmd + Option + J**；Safari 需要先在"设置 → 高级"里勾选"显示网页开发者功能"，再按 **Cmd + Option + C**），切换到 **Console（控制台）** 标签。
+3. 第一次往 Console 里粘贴东西时，浏览器会出于安全考虑拦一下，提示你先手动输入一段文字（英文界面是 `allow pasting`，中文界面以浏览器显示的为准）。照着输入并按回车，再粘贴即可。
+4. 复制下面这一整行命令，粘贴到 Console 里，按回车：
+
+```js
+(async () => { const CLIENT = "a3a5186b-7c89-4b4c-93a8-dd604e930757", TOKEN_URL = "https://signin.costco.com/e0714dd4-784d-46d6-a278-3e29553483eb/b2c_1a_sso_wcs_signup_signin_209/oauth2/v2.0/token"; const toClipboard = typeof copy === "function" ? copy : null; const found = {}; let others = 0; for (const store of [sessionStorage, localStorage]) { for (let i = 0; i < store.length; i++) { let entry; try { entry = JSON.parse(store.getItem(store.key(i))); } catch (e) { continue; } if (!entry || !entry.secret || !/^(IdToken|RefreshToken)$/.test(entry.credentialType)) continue; if (entry.clientId !== CLIENT) { others++; continue; } found[entry.credentialType] = entry.secret; } } if (!found.RefreshToken) { console.error(others ? "This page has a sign-in for a different Costco app. Open Orders & Returns and run this again." : "No Costco sign-in on this page. Sign in, open Orders & Returns, then run this again."); return; } let tokens, response; try { response = await fetch(TOKEN_URL, {method: "POST", body: new URLSearchParams({client_id: CLIENT, grant_type: "refresh_token", refresh_token: found.RefreshToken})}); const text = await response.text(); try { tokens = JSON.parse(text); } catch (e) { tokens = {}; } } catch (e) { if (!found.IdToken) { console.error("Could not reach Costco: " + e); return; } console.warn("Could not reach Costco to refresh the sign-in; using the one on this page."); tokens = {id_token: found.IdToken, refresh_token: found.RefreshToken, refresh_token_expires_in: 7776000}; } if (response && (!response.ok || !tokens.refresh_token)) { console.error("Costco refused the sign-in (" + (tokens.error_description || tokens.error || response.status) + "). Sign out, sign in again and rerun this."); return; } const block = "-----BEGIN COSTCO SIGN-IN-----\n" + btoa(unescape(encodeURIComponent(JSON.stringify(tokens)))).match(/.{1,64}/g).join("\n") + "\n-----END COSTCO SIGN-IN-----"; if (toClipboard) toClipboard(block); console.log(block + "\n\n" + (toClipboard ? "Copied to your clipboard. " : "Copy everything from BEGIN to END. ") + "Now run costco-cli."); return block; })()
+```
+
+> 这条命令也可以随时用 `./costco-cli -cmd snippet` 打印出来。
+
+Console 里会打印一段以 `-----BEGIN COSTCO SIGN-IN-----` 开头、`-----END COSTCO SIGN-IN-----` 结尾的内容，最后一行是：
+
+```
+Copied to your clipboard. Now run costco-cli.
+```
+
+说明你的登录信息**已经自动复制到剪贴板**了，不用自己去选中复制。
+
+5. 回到终端运行 `./costco-cli`（如果它已经在等待，按一下**回车**）。程序会自动从剪贴板读取登录信息：
+
+```
+You are not signed in to Costco yet, or your last sign-in has expired.
+Found a Costco sign-in in your clipboard.
+✓ Signed in. You won't need to sign in again until about 2026-12-22.
+```
+
+剪贴板里已经有登录信息时，程序会直接使用它，不再弹出登录窗口。如果剪贴板用不了，也可以把 Console 打印的那一整段（从 BEGIN 到 END）直接粘贴到终端里。
+
+## 只用登录窗口，不要备用方式
+
+运行 `./costco-cli -browser-login`：只通过弹出的窗口登录，窗口失败时直接报错，不会改为显示 Console 命令。
