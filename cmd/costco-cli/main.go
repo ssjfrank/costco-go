@@ -42,6 +42,14 @@ func main() {
 		return
 	}
 
+	switch *command {
+	case "download", "login", "snippet", "setup", "import-token", "info":
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", *command)
+		usage()
+		os.Exit(2)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -78,18 +86,18 @@ func main() {
 			Quiet:       *quiet,
 			SignIn:      signInSettings,
 		}, os.Stdout)
-
-		// An incomplete download has already reported itself in the summary; the
-		// non-zero exit is there so scripts notice the gap.
-		if errors.Is(err, errIncompleteHistory) {
-			os.Exit(1)
-		}
-		exitOnError(err)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", *command)
-		usage()
-		os.Exit(2)
+		exitAfterDownload(err)
 	}
+}
+
+// exitAfterDownload exits non-zero when the download failed or was incomplete.
+// An incomplete download has already reported itself in the summary; the
+// non-zero exit is there so scripts notice the gap.
+func exitAfterDownload(err error) {
+	if errors.Is(err, errIncompleteHistory) {
+		os.Exit(1)
+	}
+	exitOnError(err)
 }
 
 func exitOnError(err error) {

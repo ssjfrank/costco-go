@@ -95,7 +95,7 @@ func runDownload(ctx context.Context, cfg downloadConfig, out io.Writer) error {
 			return notSignedInError()
 		}
 		fmt.Fprintln(out, "You are not signed in to Costco yet, or your last sign-in has expired.")
-		if err := signIn(ctx, cfg.SignIn, out); err != nil {
+		if err = signIn(ctx, cfg.SignIn, out); err != nil {
 			return err
 		}
 	}

@@ -101,7 +101,7 @@ func capture(ctx context.Context, t transport, watch ResponseWatch) ([]byte, err
 		}
 
 		var msg message
-		if err := json.Unmarshal(data, &msg); err != nil {
+		if json.Unmarshal(data, &msg) != nil {
 			continue
 		}
 

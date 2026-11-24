@@ -160,10 +160,10 @@ func SaveTokens(tokens *StoredTokens) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectDirectoryTokenFile(filePath); err != nil {
+	if err = rejectDirectoryTokenFile(filePath); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(filePath), 0700); err != nil {
+	if err = os.MkdirAll(filepath.Dir(filePath), 0700); err != nil {
 		return err
 	}
 
@@ -198,7 +198,7 @@ func LoadTokens() (*StoredTokens, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectDirectoryTokenFile(filePath); err != nil {
+	if err = rejectDirectoryTokenFile(filePath); err != nil {
 		return nil, err
 	}
 
@@ -265,7 +265,7 @@ func GetConfigInfo() string {
 
 	// Check if config exists
 	configFile := filepath.Join(configPath, configFile)
-	if _, err := os.Stat(configFile); err == nil {
+	if _, err = os.Stat(configFile); err == nil {
 		info += fmt.Sprintf("Config file: %s (exists)\n", configFile)
 	} else {
 		info += fmt.Sprintf("Config file: %s (not found)\n", configFile)

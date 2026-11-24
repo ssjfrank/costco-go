@@ -84,7 +84,7 @@ func Launch(ctx context.Context, opts LaunchOptions) (*Browser, error) {
 	// don't let them hold Wait open.
 	cmd.WaitDelay = 2 * time.Second
 
-	if err := cmd.Start(); err != nil {
+	if err = cmd.Start(); err != nil {
 		if !keepProfile {
 			_ = os.RemoveAll(profileDir)
 		}
