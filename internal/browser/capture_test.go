@@ -238,6 +238,39 @@ func TestCapture_EnablesNetworkBeforeNavigating(t *testing.T) {
 	assert.Len(t, chrome.commandsNamed("Target.attachToTarget"), 1, "non-page targets are ignored")
 }
 
+func TestCapture_ClearsTheStartPagesStoredDataBeforeNavigating(t *testing.T) {
+	chrome := newFakeChrome(t)
+	chrome.bodies["token"] = fakeBody{body: testTokens}
+	chrome.navigate = func(f *fakeChrome, cmd sentCommand) {
+		f.finishResponse(cmd.SessionID, "token", testTokenURL, 200)
+	}
+	watch := tokenWatch()
+	watch.StartURL = "https://www.costco.com/myaccount/#/app/orders"
+
+	_, err := captureWithin(t, chrome, watch)
+	require.NoError(t, err)
+
+	clearAt, navigateAt := -1, -1
+	for i, cmd := range chrome.commands {
+		switch cmd.Method {
+		case "Storage.clearDataForOrigin":
+			clearAt = i
+			var params struct {
+				Origin       string `json:"origin"`
+				StorageTypes string `json:"storageTypes"`
+			}
+			require.NoError(t, json.Unmarshal(cmd.Params, &params))
+			assert.Equal(t, "https://www.costco.com", params.Origin)
+			assert.Equal(t, "local_storage", params.StorageTypes, "cookies are what keep the user signed in and must stay")
+			assert.Equal(t, "session-page-1", cmd.SessionID)
+		case "Page.navigate":
+			navigateAt = i
+		}
+	}
+	require.NotEqual(t, -1, clearAt, "a page that still holds tokens from last time would never request new ones")
+	assert.Less(t, clearAt, navigateAt)
+}
+
 func TestCapture_DecodesBase64Bodies(t *testing.T) {
 	chrome := newFakeChrome(t)
 	chrome.bodies["token"] = fakeBody{body: base64.StdEncoding.EncodeToString([]byte(testTokens)), base64: true}

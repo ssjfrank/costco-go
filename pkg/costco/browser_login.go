@@ -114,6 +114,11 @@ func LoginWithBrowser(ctx context.Context, opts BrowserLoginOptions) (*TokenResp
 
 	opts.report("A browser window has opened on Costco's sign-in page. Sign in there with any method you normally use;\n" +
 		"the window closes by itself once your order history starts loading.")
+	if opts.ProfileDir != "" {
+		opts.report("If Costco still remembers you in that window, it closes without you doing anything.\n" +
+			"Its cookies are kept on this computer only, in " + opts.ProfileDir + ";\n" +
+			"delete that folder to remove them.")
+	}
 
 	body, err := session.Capture(signInCtx, browser.ResponseWatch{
 		StartURL: opts.startURL,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 )
 
 var (
@@ -271,6 +272,11 @@ func (s *captureState) handleReply(ctx context.Context, msg message) ([]byte, bo
 // attached enables network events on a newly attached window and, if it is the
 // first window, sends it to the start page. Network events are enabled first so
 // that nothing the start page does can be missed.
+//
+// The start page's localStorage is emptied before it loads. In a profile kept
+// from an earlier sign-in, a page that stored its tokens there would use them
+// and never make the request being waited for. Cookies are left alone: they are
+// what lets the site recognise the user without asking for a password again.
 func (s *captureState) attached(ctx context.Context, targetID string, msg message) error {
 	if msg.Error != nil {
 		return nil
@@ -291,10 +297,29 @@ func (s *captureState) attached(ctx context.Context, targetID string, msg messag
 	}
 
 	s.navigated = true
+	if origin := originOf(s.watch.StartURL); origin != "" {
+		// Chrome runs a session's commands in order, so this is done before the
+		// page loads. A refusal is not fatal: the reply is simply ignored.
+		if _, err := s.send(ctx, result.SessionID, "Storage.clearDataForOrigin", map[string]any{
+			"origin":       origin,
+			"storageTypes": "local_storage",
+		}); err != nil {
+			return err
+		}
+	}
 	id, err := s.send(ctx, result.SessionID, "Page.navigate", map[string]any{"url": s.watch.StartURL})
 	if err != nil {
 		return err
 	}
 	s.navigateID = id
 	return nil
+}
+
+// originOf returns the scheme and host of an http(s) URL, or "" for anything else.
+func originOf(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }

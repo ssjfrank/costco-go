@@ -204,6 +204,8 @@ func TestLoginWithBrowser_ReusesTheSessionKeptInItsProfile(t *testing.T) {
 
 	options := testLoginOptions(path, site)
 	options.ProfileDir = filepath.Join(t.TempDir(), "browser-profile")
+	var progress []string
+	options.Progress = func(message string) { progress = append(progress, message) }
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -216,6 +218,7 @@ func TestLoginWithBrowser_ReusesTheSessionKeptInItsProfile(t *testing.T) {
 	assert.Equal(t, 1, session.signInPageVisits(), "the second window is already signed in and never shows the sign-in page")
 	_, err := os.Stat(options.ProfileDir)
 	assert.NoError(t, err, "the profile stays on disk between sign-ins")
+	assert.Contains(t, strings.Join(progress, "\n"), options.ProfileDir, "the user is told where the cookies are kept")
 }
 
 func TestLoginWithBrowser_ATemporaryProfileRemembersNothing(t *testing.T) {
@@ -242,4 +245,43 @@ func TestBrowserProfileDir_LivesInTheConfigDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(os.Getenv("COSTCO_TEST_CONFIG_PATH"), "browser-profile"), dir)
 	assert.Contains(t, GetConfigInfo(), dir)
+}
+
+// fakeTokenCachingSite is an account app that, like MSAL.js, keeps the tokens it
+// was issued in localStorage and asks for no new ones while it still has them.
+func fakeTokenCachingSite(t *testing.T, tokenBody string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<!doctype html><title>Costco</title><script>
+if (localStorage.getItem("msal.tokens")) { document.title = "already signed in"; }
+else {
+  localStorage.setItem("msal.tokens", "cached");
+  setTimeout(function () { fetch("/policy/oauth2/v2.0/token", {method: "POST"}); }, 1500);
+}</script>`)
+	})
+	mux.HandleFunc("/policy/oauth2/v2.0/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(tokenBody))
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestLoginWithBrowser_GetsTokensEvenWhenThePageStillHasItsOwn(t *testing.T) {
+	path := requireTestBrowser(t)
+	site := fakeTokenCachingSite(t, `{"id_token":"id","refresh_token":"refresh-123","refresh_token_expires_in":7776000}`)
+
+	options := testLoginOptions(path, site)
+	options.ProfileDir = filepath.Join(t.TempDir(), "browser-profile")
+	options.Timeout = 20 * time.Second
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		tokens, err := LoginWithBrowser(context.Background(), options)
+		require.NoError(t, err, "sign-in %d: a page that kept its tokens from last time never asks Costco for new ones", attempt)
+		assert.Equal(t, "refresh-123", tokens.RefreshToken)
+	}
 }
