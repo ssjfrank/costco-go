@@ -498,7 +498,8 @@ func TestDownloadHistory_StopsWhenSignInIsLostInALaterWindow(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrNotAuthenticated, "a lost sign-in must surface so the caller can log in again")
 	assert.Nil(t, history)
-	assert.Equal(t, 4, api.requestCount, "a rejected sign-in is not retried and does not continue to later windows")
+	assert.Equal(t, 5, api.requestCount,
+		"the rejected request is followed by one refresh, also rejected; nothing is retried and no later window is tried")
 }
 
 func TestDownloadHistory_ResumesFromStore(t *testing.T) {
