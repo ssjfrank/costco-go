@@ -281,7 +281,7 @@ func (c *Client) executeGraphQL(ctx context.Context, query string, variables map
 	if signInRefused(resp.StatusCode) && c.hasRefreshToken() {
 		resp.Body.Close()
 		c.getLogger().Info("id token refused, refreshing once", slog.Int("status_code", resp.StatusCode))
-		if err := c.refreshToken(); err != nil {
+		if err = c.refreshToken(); err != nil {
 			return fmt.Errorf("token refresh failed: %w", err)
 		}
 		if resp, err = c.postGraphQL(ctx, body); err != nil {
