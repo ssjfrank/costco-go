@@ -3,6 +3,11 @@ package costco
 // Order-related types for Costco online orders
 
 // OnlineOrder represents a single online order from Costco.com
+//
+// OrderPaymentFailed is filled from Costco's orderPaymentEditAllowed field,
+// which OnlineOrdersQuery requests under that alias. It says that the order's
+// payment can still be edited, not that a payment was declined. The name stays
+// so that files already downloaded keep their shape.
 type OnlineOrder struct {
 	OrderHeaderID      string          `json:"orderHeaderId"`
 	OrderPlacedDate    string          `json:"orderPlacedDate"`
