@@ -465,6 +465,13 @@ example `costco-cli -since 2026-01-01`.
 
 ## Publishing binaries
 
+Every CI run (each pull request and push to `main`) builds the same binaries
+and attaches them to the run: open the run under **Actions** and download
+`costco-cli-windows-amd64.exe`, `costco-cli-linux-amd64` and the rest from its
+**Artifacts** section. GitHub delivers each one as a zip and keeps it for 90
+days. The `Build` jobs also start the Windows, Linux and Apple Silicon binaries
+on matching machines to check that they run.
+
 Pushing a version tag publishes a release. `.github/workflows/release.yml` runs
 the tests, builds macOS (Apple Silicon and Intel), Linux and Windows binaries
 with `scripts/build-release.sh`, and attaches them to a GitHub Release along

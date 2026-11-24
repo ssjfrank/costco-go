@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -69,7 +70,8 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v3
         with:
-          version: latest
+          # .golangci.yml is in the v1 format, which golangci-lint v2 refuses.
+          version: v1.64.8
           args: --timeout=5m
 
   version-consistency:
@@ -99,12 +101,9 @@ jobs:
 
           echo "All versions consistent: $CONST_VERSION"
 
-  build:
-    name: Build
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  binaries:
+    name: Binaries
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -115,15 +114,96 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build
+      - name: Build every platform
+        run: scripts/build-release.sh dist
+
+      - name: Upload Windows (x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: costco-cli-windows-amd64.exe
+          path: dist/costco-cli-windows-amd64.exe
+          if-no-files-found: error
+
+      - name: Upload Linux (x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: costco-cli-linux-amd64
+          path: dist/costco-cli-linux-amd64
+          if-no-files-found: error
+
+      - name: Upload Linux (ARM64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: costco-cli-linux-arm64
+          path: dist/costco-cli-linux-arm64
+          if-no-files-found: error
+
+      - name: Upload macOS (Apple Silicon)
+        uses: actions/upload-artifact@v4
+        with:
+          name: costco-cli-darwin-arm64
+          path: dist/costco-cli-darwin-arm64
+          if-no-files-found: error
+
+      - name: Upload macOS (Intel)
+        uses: actions/upload-artifact@v4
+        with:
+          name: costco-cli-darwin-amd64
+          path: dist/costco-cli-darwin-amd64
+          if-no-files-found: error
+
+      - name: Upload all platforms with SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: costco-cli-all-platforms
+          path: dist/
+          if-no-files-found: error
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: binaries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            binary: costco-cli-linux-amd64
+          - os: ubuntu-24.04-arm
+            binary: costco-cli-linux-arm64
+          - os: macos-latest
+            binary: costco-cli-darwin-arm64
+          - os: windows-latest
+            binary: costco-cli-windows-amd64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build from source
+        run: go build -v ./...
+
+      - name: Download the binary built for this platform
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: dist
+
+      - name: Run the downloaded binary
+        shell: bash
         run: |
-          go build -v ./...
-          go build -v -o costco-cli${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/costco-cli
-
-      - name: Test binary
-        run: ./costco-cli -version
-        if: runner.os != 'Windows'
-
-      - name: Test binary (Windows)
-        run: ./costco-cli.exe -version
-        if: runner.os == 'Windows'
+          binary="dist/${{ matrix.binary }}"
+          chmod +x "$binary"
+          want=$(sed -n 's/.*Version = "\(.*\)".*/\1/p' pkg/costco/constants.go)
+          got=$("./$binary" -version)
+          echo "$got"
+          case "$got" in
+            "costco-cli $want (commit "*) ;;
+            *) echo "expected costco-cli $want with a commit"; exit 1 ;;
+          esac
+          "./$binary" -cmd info

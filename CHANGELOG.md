@@ -13,12 +13,14 @@ leave receipts without line items or shrink the index files.
 ### Added
 - **`-console-login`**: Sign in only with the console command in your own browser; never open a window.
 - **`-temp-profile`**: Give the sign-in window a throwaway profile that is deleted when the window closes, so no Costco cookies are kept on disk.
+- **Binaries from every CI run**: The `Binaries` job builds Windows, Linux and macOS executables with `scripts/build-release.sh` on every pull request and push to `main`, and attaches each to the run as a download. The `Build` jobs then run the Windows, Linux (x64 and ARM64) and Apple Silicon binaries on matching machines. CI can also be started by hand (`workflow_dispatch`).
 - **`BrowserLoginOptions.ProfileDir`** and **`BrowserProfileDir()`**: Keep the sign-in window's profile between sign-ins, and the folder the CLI keeps it in (`~/.costco/browser-profile`). `costco-cli -cmd info` shows whether that folder exists.
 
 ### Changed
 - **`costco-cli` opens a sign-in window by default.** When a sign-in is needed it starts Chrome, Edge, Chromium or Brave on Costco's sign-in page and closes the window once Costco has issued tokens; nothing has to be pasted. The console command is now the fallback: it is shown when no window can open (no supported browser, no display) or when the window fails. A sign-in block already in the clipboard is still used first, without opening a window. `-browser-login` now means "the window only, no fallback".
 - **The sign-in window keeps its profile** in `~/.costco/browser-profile`, so Costco's cookies are still there the next time it opens and Costco may sign you in without asking. Whether it does is up to Costco; this has not been tried with a real account. Passwords and passkeys saved only in your everyday browser profile are not available in this one.
 - **`manifest.json`, `orders.json` and `receipts.json` cover the whole archive.** `FileStore.WriteHistory` rebuilds them from every file in `orders/` and `receipts/`, and the manifest's date range only ever widens. Before, a narrower re-run such as `-since 2026-01-01` rewrote them with just that run's records. Files in those folders that cannot be read are listed in the manifest's warnings.
+- **CI pins golangci-lint to v1.64.8**, the last release that reads the v1 `.golangci.yml`, and the lint findings it reported (one `exitAfterDefer`, eight shadowed `err` variables) are fixed, so the `Lint` job passes again.
 - **`costco-cli` waits between retries** of a failed API call: 1s, 2s, then 4s. It used to retry immediately.
 
 ### Fixed
